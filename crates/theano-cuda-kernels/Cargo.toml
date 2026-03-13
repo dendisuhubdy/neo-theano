@@ -3,6 +3,10 @@ name = "theano-cuda-kernels"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "CUDA kernel compilation for the Theano deep learning framework"
+description = "CUDA kernel source and PTX compilation for the Theano deep learning framework"
 
 [dependencies]
+
+[build-dependencies]
+# bindgen_cuda will be used when CUDA toolkit is available
+# bindgen_cuda = "0.1"

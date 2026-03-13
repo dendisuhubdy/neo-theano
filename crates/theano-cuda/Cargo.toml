@@ -5,7 +5,15 @@ edition.workspace = true
 license.workspace = true
 description = "CUDA GPU backend for the Theano deep learning framework"
 
+[features]
+default = []
+# Enable cudarc integration — requires CUDA runtime at link/runtime
+cudarc = ["dep:cudarc"]
+
 [dependencies]
 theano-types = { workspace = true }
 theano-backend = { workspace = true }
+theano-cuda-kernels = { workspace = true }
 thiserror = { workspace = true }
+parking_lot = { workspace = true }
+cudarc = { version = "0.16", optional = true, features = ["std", "cublas", "curand"] }
