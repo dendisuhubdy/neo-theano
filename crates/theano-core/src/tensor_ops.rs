@@ -420,9 +420,14 @@ impl Tensor {
         let b_mat_size = k * n;
         let c_mat_size = m * n;
 
+        // Compute batch counts for broadcasting
+        let a_batch_numel: usize = a_batch.iter().product::<usize>().max(1);
+        let b_batch_numel: usize = b_batch.iter().product::<usize>().max(1);
+
         for batch in 0..batch_numel {
-            let a_off = batch * a_mat_size;
-            let b_off = batch * b_mat_size;
+            // Handle broadcasting: if one side has fewer batches, wrap around
+            let a_off = (batch % a_batch_numel) * a_mat_size;
+            let b_off = (batch % b_batch_numel) * b_mat_size;
             let c_off = batch * c_mat_size;
 
             for i in 0..m {
