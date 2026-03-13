@@ -9,5 +9,3 @@ description = "Optimizers for the Theano deep learning framework"
 theano-types = { workspace = true }
 theano-core = { workspace = true }
 theano-autograd = { workspace = true }
-theano-nn = { workspace = true }
-thiserror = { workspace = true }

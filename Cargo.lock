@@ -701,9 +701,7 @@ version = "0.1.0"
 dependencies = [
  "theano-autograd",
  "theano-core",
- "theano-nn",
  "theano-types",
- "thiserror 2.0.18",
 ]
 
 [[package]]

@@ -70,6 +70,13 @@ impl Variable {
         Variable::new(self.tensor.detach())
     }
 
+    /// Replace the underlying tensor data (used by optimizers).
+    /// The new tensor will be a leaf with requires_grad=true and no grad_fn.
+    pub fn update_param(&mut self, new_tensor: Tensor) {
+        self.tensor = new_tensor.requires_grad_(true);
+        self.inputs = vec![];
+    }
+
     /// Create a new variable as the output of an operation.
     fn from_op(
         tensor: Tensor,

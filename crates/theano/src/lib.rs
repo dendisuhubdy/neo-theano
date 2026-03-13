@@ -22,6 +22,9 @@ pub use theano_types as types;
 pub use theano_core as core;
 pub use theano_backend as backend;
 pub use theano_autograd as autograd;
+pub use theano_nn as nn;
+pub use theano_optim as optim;
+pub use theano_data as data;
 
 #[cfg(feature = "cpu")]
 pub use theano_cpu as cpu;
@@ -35,4 +38,6 @@ pub use theano_autograd::{Variable, backward, no_grad, NoGradGuard};
 pub mod prelude {
     pub use crate::{DType, Device, Layout, Shape, Tensor, Variable, Result};
     pub use crate::{no_grad, NoGradGuard};
+    pub use theano_nn::Module;
+    pub use theano_optim::Optimizer;
 }
