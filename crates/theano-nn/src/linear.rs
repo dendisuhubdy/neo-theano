@@ -59,6 +59,19 @@ impl Linear {
     pub fn bias(&self) -> Option<&Variable> {
         self.bias.as_ref()
     }
+
+    /// Reconstruct a Linear layer from pre-trained tensors.
+    pub fn from_tensors(weight: Tensor, bias: Option<Tensor>) -> Self {
+        let shape = weight.shape().to_vec();
+        let out_features = shape[0];
+        let in_features = shape[1];
+        Self {
+            weight: Variable::requires_grad(weight),
+            bias: bias.map(Variable::requires_grad),
+            in_features,
+            out_features,
+        }
+    }
 }
 
 impl Module for Linear {

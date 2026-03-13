@@ -25,6 +25,17 @@ impl LayerNorm {
             bias,
         }
     }
+
+    /// Reconstruct a LayerNorm from pre-trained weight and bias tensors.
+    pub fn from_tensors(weight: Tensor, bias: Tensor) -> Self {
+        let normalized_shape = weight.shape().to_vec();
+        Self {
+            normalized_shape,
+            eps: 1e-5,
+            weight: Variable::requires_grad(weight),
+            bias: Variable::requires_grad(bias),
+        }
+    }
 }
 
 impl Module for LayerNorm {

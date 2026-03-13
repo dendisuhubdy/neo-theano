@@ -45,6 +45,21 @@ impl MultiheadAttention {
         }
     }
 
+    /// Reconstruct a MultiheadAttention from pre-trained Linear layers.
+    pub fn from_linears(num_heads: usize, q_proj: Linear, k_proj: Linear, v_proj: Linear, out_proj: Linear) -> Self {
+        let embed_dim = q_proj.in_features();
+        let head_dim = embed_dim / num_heads;
+        Self {
+            embed_dim,
+            num_heads,
+            head_dim,
+            q_proj,
+            k_proj,
+            v_proj,
+            out_proj,
+        }
+    }
+
     /// Forward: query, key, value all [batch, seq_len, embed_dim]
     /// Returns: [batch, seq_len, embed_dim]
     pub fn forward_qkv(&self, query: &Variable, key: &Variable, value: &Variable) -> Variable {

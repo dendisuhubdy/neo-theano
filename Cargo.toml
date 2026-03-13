@@ -24,6 +24,11 @@ members = [
     "crates/theano-python",
     "crates/theano",
 ]
+exclude = [
+    "research/enzyme-prototype",
+    "research/offload-prototype",
+    "research/benchmarks",
+]
 
 [workspace.package]
 version = "0.1.0"
