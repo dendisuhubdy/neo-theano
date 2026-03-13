@@ -87,7 +87,7 @@ impl Tensor {
     }
 
     /// Create a tensor with autograd metadata.
-    pub(crate) fn from_parts_with_grad(
+    pub fn from_parts_with_grad(
         storage: Storage,
         shape: Vec<usize>,
         strides: Vec<usize>,
@@ -187,6 +187,18 @@ impl Tensor {
     /// Whether this is a leaf tensor (created by user, not by an operation).
     pub fn is_leaf(&self) -> bool {
         self.inner.grad_fn.is_none()
+    }
+
+    /// Set the gradient on this tensor. Used by the autograd engine.
+    pub fn set_grad(&self, grad: Tensor) {
+        let mut g = self.inner.grad.write();
+        *g = Some(grad);
+    }
+
+    /// Stable identity based on the Arc pointer. Two tensors sharing the same
+    /// Arc<TensorInner> will have the same id. Used by the autograd engine.
+    pub fn data_ptr_id(&self) -> usize {
+        Arc::as_ptr(&self.inner) as usize
     }
 
     /// Whether this tensor is contiguous in memory (row-major / C-contiguous).

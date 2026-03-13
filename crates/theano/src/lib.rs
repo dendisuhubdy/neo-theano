@@ -21,6 +21,7 @@
 pub use theano_types as types;
 pub use theano_core as core;
 pub use theano_backend as backend;
+pub use theano_autograd as autograd;
 
 #[cfg(feature = "cpu")]
 pub use theano_cpu as cpu;
@@ -28,8 +29,10 @@ pub use theano_cpu as cpu;
 // Re-export key types at the top level for convenience
 pub use theano_types::{DType, Device, DeviceType, Layout, Shape, TheanoError, Result};
 pub use theano_core::Tensor;
+pub use theano_autograd::{Variable, backward, no_grad, NoGradGuard};
 
 /// Commonly used imports.
 pub mod prelude {
-    pub use crate::{DType, Device, Layout, Shape, Tensor, Result};
+    pub use crate::{DType, Device, Layout, Shape, Tensor, Variable, Result};
+    pub use crate::{no_grad, NoGradGuard};
 }
