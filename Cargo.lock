@@ -583,7 +583,9 @@ dependencies = [
 name = "theano-barracuda"
 version = "0.1.0"
 dependencies = [
+ "parking_lot",
  "theano-backend",
+ "theano-cuda-kernels",
  "theano-types",
  "thiserror 2.0.18",
 ]
@@ -651,6 +653,7 @@ dependencies = [
 name = "theano-distributed"
 version = "0.1.0"
 dependencies = [
+ "parking_lot",
  "theano-core",
  "theano-types",
  "thiserror 2.0.18",
@@ -726,7 +729,9 @@ dependencies = [
 name = "theano-rocm"
 version = "0.1.0"
 dependencies = [
+ "parking_lot",
  "theano-backend",
+ "theano-rocm-kernels",
  "theano-types",
  "thiserror 2.0.18",
 ]

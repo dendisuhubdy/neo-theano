@@ -3,9 +3,11 @@ name = "theano-barracuda"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "BarraCUDA backend for the Theano deep learning framework"
+description = "BarraCUDA backend for the Theano deep learning framework — compiles .cu directly to AMD GFX11"
 
 [dependencies]
 theano-types = { workspace = true }
 theano-backend = { workspace = true }
+theano-cuda-kernels = { workspace = true }
 thiserror = { workspace = true }
+parking_lot = { workspace = true }
