@@ -9,3 +9,4 @@ description = "WebGPU backend for the Theano deep learning framework"
 theano-types = { workspace = true }
 theano-backend = { workspace = true }
 thiserror = { workspace = true }
+parking_lot = { workspace = true }

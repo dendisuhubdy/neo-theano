@@ -3,9 +3,10 @@ name = "theano-oneapi"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Intel oneAPI backend for the Theano deep learning framework"
+description = "Intel oneAPI/Level Zero backend for the Theano deep learning framework"
 
 [dependencies]
 theano-types = { workspace = true }
 theano-backend = { workspace = true }
 thiserror = { workspace = true }
+parking_lot = { workspace = true }

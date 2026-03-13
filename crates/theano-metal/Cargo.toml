@@ -5,7 +5,15 @@ edition.workspace = true
 license.workspace = true
 description = "Apple Metal GPU backend for the Theano deep learning framework"
 
+[features]
+default = []
+# Enable real Metal integration (macOS only).
+# When objc2-metal becomes available, change to: metal-api = ["dep:objc2-metal"]
+metal-api = []
+
 [dependencies]
 theano-types = { workspace = true }
 theano-backend = { workspace = true }
 thiserror = { workspace = true }
+parking_lot = { workspace = true }
+# objc2-metal = { version = "0.2", optional = true }  # Uncomment when available

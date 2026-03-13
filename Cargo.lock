@@ -672,6 +672,7 @@ dependencies = [
 name = "theano-metal"
 version = "0.1.0"
 dependencies = [
+ "parking_lot",
  "theano-backend",
  "theano-types",
  "thiserror 2.0.18",
@@ -693,6 +694,7 @@ dependencies = [
 name = "theano-oneapi"
 version = "0.1.0"
 dependencies = [
+ "parking_lot",
  "theano-backend",
  "theano-types",
  "thiserror 2.0.18",
@@ -764,6 +766,7 @@ dependencies = [
 name = "theano-wgpu"
 version = "0.1.0"
 dependencies = [
+ "parking_lot",
  "theano-backend",
  "theano-types",
  "thiserror 2.0.18",
