@@ -76,6 +76,21 @@ impl LSTMCell {
         }
     }
 
+    /// Reconstruct an LSTMCell from pre-trained tensors.
+    pub fn from_tensors(w_ih: Tensor, w_hh: Tensor, b_ih: Tensor, b_hh: Tensor) -> Self {
+        let gate_size = w_ih.shape()[0];
+        let input_size = w_ih.shape()[1];
+        let hidden_size = gate_size / 4;
+        Self {
+            input_size,
+            hidden_size,
+            w_ih: Variable::requires_grad(w_ih),
+            w_hh: Variable::requires_grad(w_hh),
+            b_ih: Variable::requires_grad(b_ih),
+            b_hh: Variable::requires_grad(b_hh),
+        }
+    }
+
     /// Forward: (input, (h, c)) -> (h', c')
     pub fn forward_cell(&self, input: &Variable, h: &Variable, c: &Variable) -> (Variable, Variable) {
         let w_ih_t = self.w_ih.t().unwrap();

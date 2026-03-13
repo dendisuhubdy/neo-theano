@@ -76,6 +76,23 @@ impl Conv2d {
         self.out_channels
     }
 
+    /// Reconstruct a Conv2d layer from pre-trained tensors.
+    pub fn from_tensors(weight: Tensor, bias: Option<Tensor>, stride: (usize, usize), padding: (usize, usize)) -> Self {
+        let shape = weight.shape().to_vec();
+        let out_channels = shape[0];
+        let in_channels = shape[1];
+        let kernel_size = (shape[2], shape[3]);
+        Self {
+            in_channels,
+            out_channels,
+            kernel_size,
+            stride,
+            padding,
+            weight: Variable::requires_grad(weight),
+            bias: bias.map(Variable::requires_grad),
+        }
+    }
+
     /// Compute output spatial dimensions.
     fn output_size(&self, h_in: usize, w_in: usize) -> (usize, usize) {
         let h_out = (h_in + 2 * self.padding.0 - self.kernel_size.0) / self.stride.0 + 1;

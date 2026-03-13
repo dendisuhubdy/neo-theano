@@ -168,12 +168,12 @@ theano/
 | Backend | Feature Flag | Status | Notes |
 |---------|-------------|--------|-------|
 | CPU | `cpu` (default) | Stable | BLAS-accelerated via `gemm` crate |
-| NVIDIA CUDA | `cuda` | In progress | CUDA 12+ |
-| AMD ROCm | `rocm` | In progress | ROCm 6+ |
-| BarraCUDA | -- | Planned | High-performance CUDA alternative |
-| Apple Metal | `metal` | Planned | macOS/iOS GPU acceleration |
-| WebGPU | `wgpu-backend` | Planned | Cross-platform via `wgpu` |
-| Intel oneAPI | `oneapi` | Planned | Intel GPU/accelerator support |
+| NVIDIA CUDA | `cuda` | Implemented | cudarc FFI, caching allocator, cuBLAS, custom .cu kernels |
+| AMD ROCm | `rocm` | Implemented | HIP FFI, mirrors CUDA architecture, .hip kernels |
+| BarraCUDA | -- | Experimental | Direct .cu → AMD GFX11 compilation (no HIP translation) |
+| Apple Metal | `metal` | Implemented | MSL shaders, MPS, Apple M1/M2/M3/M4 |
+| WebGPU | `wgpu-backend` | Implemented | WGSL shaders, Vulkan/Metal/DX12/WebGPU/WASM |
+| Intel oneAPI | `oneapi` | Implemented | Level Zero, Intel Arc/Gaudi/Ponte Vecchio |
 
 Enable backends via Cargo features:
 
@@ -318,26 +318,31 @@ cargo run -p theano --example mnist_cnn
 - [x] Loss functions (MSE, CrossEntropy, BCE, NLL, L1, KLDiv)
 - [x] Data loading abstractions
 
-### Phase 4 -- GPU Backends (in progress)
-- [ ] NVIDIA CUDA backend
-- [ ] AMD ROCm backend
-- [ ] Apple Metal backend
-- [ ] WebGPU backend
-- [ ] Intel oneAPI backend
+### Phase 4 -- GPU Backends (done)
+- [x] NVIDIA CUDA backend (cudarc, caching allocator, .cu kernels)
+- [x] AMD ROCm/HIP backend (mirror of CUDA architecture)
+- [x] BarraCUDA backend (direct .cu to AMD GFX11 compilation)
+- [x] Apple Metal backend (MSL shaders, M1-M4 support)
+- [x] WebGPU backend (wgpu, WGSL shaders, cross-platform + WASM)
+- [x] Intel oneAPI backend (Level Zero, Arc/Gaudi/Ponte Vecchio)
 
-### Phase 5 -- Advanced Features (planned)
-- [ ] Distributed training (data parallel, model parallel)
-- [ ] JIT compilation and graph optimization
-- [ ] INT8/INT4 quantization
-- [ ] Model serialization (save/load checkpoints)
-- [ ] Python bindings via PyO3
-- [ ] ONNX import/export
+### Phase 5 -- Advanced Features (done)
+- [x] Distributed training (ProcessGroup, DDP, FSDP, NCCL/RCCL/Gloo)
+- [x] JIT compilation and graph optimization (SSA IR, dead code elimination)
+- [x] INT8/INT4/FP8 quantization (PTQ, QAT, observers, fake quantize)
+- [x] Model serialization (SafeTensors format, state_dict save/load)
+- [x] Python bindings via PyO3 (tensor, nn, dtype API surface)
+- [x] ONNX export stubs
 
-### Phase 6 -- Ecosystem (planned)
-- [ ] Pre-trained model zoo (ResNet, GPT-2, ViT, etc.)
-- [ ] torchvision-equivalent image transforms
-- [ ] torchaudio-equivalent audio processing
-- [ ] Hugging Face Hub integration
+### Phase 6 -- Ecosystem (done)
+- [x] 22 PyTorch-equivalent examples (MNIST, ResNet, VAE, DCGAN, ViT, GCN, GAT, RL, etc.)
+- [x] Comprehensive documentation (architecture, getting-started, API reference, backends, contributing)
+- [x] GitHub Actions CI/CD (test matrix, clippy, fmt, coverage, release, benchmarks)
+- [x] Jenkinsfile for enterprise CI
+- [x] [theano-vision](https://github.com/Neo-Theano/multimodal) — torchvision-equivalent image transforms and pretrained models
+- [x] [theano-audio](https://github.com/Neo-Theano/multimodal) — torchaudio-equivalent audio processing
+- [x] [theano-text](https://github.com/Neo-Theano/multimodal) — torchtext-equivalent NLP utilities
+- [x] [theano-multimodal](https://github.com/Neo-Theano/multimodal) — multimodal model zoo (ResNet, ViT, GPT-2, etc.)
 
 ## Contributing
 

@@ -25,6 +25,18 @@ impl Embedding {
 
     pub fn num_embeddings(&self) -> usize { self.num_embeddings }
     pub fn embedding_dim(&self) -> usize { self.embedding_dim }
+
+    /// Reconstruct an Embedding layer from a pre-trained weight tensor.
+    pub fn from_tensors(weight: Tensor) -> Self {
+        let shape = weight.shape().to_vec();
+        let num_embeddings = shape[0];
+        let embedding_dim = shape[1];
+        Self {
+            num_embeddings,
+            embedding_dim,
+            weight: Variable::requires_grad(weight),
+        }
+    }
 }
 
 impl Module for Embedding {
