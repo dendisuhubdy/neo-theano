@@ -1,0 +1,11 @@
+[package]
+name = "theano-offload-prototype"
+version = "0.1.0"
+edition = "2021"
+description = "Prototype: GPU offload via core::intrinsics::offload for Neo Theano"
+
+[dependencies]
+
+[features]
+# When nightly Rust with GPU offload is available, enable this
+nightly-offload = []

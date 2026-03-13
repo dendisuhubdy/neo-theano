@@ -1,0 +1,11 @@
+[package]
+name = "theano-enzyme-prototype"
+version = "0.1.0"
+edition = "2021"
+description = "Prototype: Enzyme-based compiler-level autodiff for Neo Theano"
+
+[dependencies]
+
+[features]
+# When nightly Rust with Enzyme is available, enable this
+nightly-autodiff = []
