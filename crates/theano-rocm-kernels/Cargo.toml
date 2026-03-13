@@ -1,0 +1,8 @@
+[package]
+name = "theano-rocm-kernels"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "ROCm kernel compilation for the Theano deep learning framework"
+
+[dependencies]

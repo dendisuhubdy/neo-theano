@@ -1,0 +1,13 @@
+[package]
+name = "theano-autograd"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Automatic differentiation engine for the Theano deep learning framework"
+
+[dependencies]
+theano-types = { workspace = true }
+theano-core = { workspace = true }
+theano-backend = { workspace = true }
+thiserror = { workspace = true }
+parking_lot = { workspace = true }

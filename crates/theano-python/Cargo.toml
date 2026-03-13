@@ -1,0 +1,11 @@
+[package]
+name = "theano-python"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Python bindings for the Theano deep learning framework"
+
+[dependencies]
+theano-types = { workspace = true }
+theano-core = { workspace = true }
+thiserror = { workspace = true }

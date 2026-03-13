@@ -1,0 +1,80 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/theano-types",
+    "crates/theano-core",
+    "crates/theano-backend",
+    "crates/theano-cpu",
+    "crates/theano-cuda",
+    "crates/theano-cuda-kernels",
+    "crates/theano-rocm",
+    "crates/theano-rocm-kernels",
+    "crates/theano-barracuda",
+    "crates/theano-metal",
+    "crates/theano-wgpu",
+    "crates/theano-oneapi",
+    "crates/theano-autograd",
+    "crates/theano-nn",
+    "crates/theano-optim",
+    "crates/theano-data",
+    "crates/theano-serialize",
+    "crates/theano-distributed",
+    "crates/theano-jit",
+    "crates/theano-quantize",
+    "crates/theano-python",
+    "crates/theano",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/dendisuhubdy/theano"
+rust-version = "1.75"
+
+[workspace.dependencies]
+# Internal crates
+theano-types = { path = "crates/theano-types" }
+theano-core = { path = "crates/theano-core" }
+theano-backend = { path = "crates/theano-backend" }
+theano-cpu = { path = "crates/theano-cpu" }
+theano-cuda = { path = "crates/theano-cuda" }
+theano-cuda-kernels = { path = "crates/theano-cuda-kernels" }
+theano-rocm = { path = "crates/theano-rocm" }
+theano-rocm-kernels = { path = "crates/theano-rocm-kernels" }
+theano-barracuda = { path = "crates/theano-barracuda" }
+theano-metal = { path = "crates/theano-metal" }
+theano-wgpu = { path = "crates/theano-wgpu" }
+theano-oneapi = { path = "crates/theano-oneapi" }
+theano-autograd = { path = "crates/theano-autograd" }
+theano-nn = { path = "crates/theano-nn" }
+theano-optim = { path = "crates/theano-optim" }
+theano-data = { path = "crates/theano-data" }
+theano-serialize = { path = "crates/theano-serialize" }
+theano-distributed = { path = "crates/theano-distributed" }
+theano-jit = { path = "crates/theano-jit" }
+theano-quantize = { path = "crates/theano-quantize" }
+theano-python = { path = "crates/theano-python" }
+
+# External dependencies
+half = { version = "2.4", features = ["std", "num-traits", "bytemuck"] }
+num-traits = "0.2"
+num-complex = "0.4"
+thiserror = "2"
+rayon = "1.10"
+rand = "0.8"
+rand_distr = "0.4"
+bytemuck = { version = "1.16", features = ["derive"] }
+parking_lot = "0.12"
+smallvec = "1.13"
+gemm = "0.18"
+cblas-sys = "0.1"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+
+[profile.bench]
+inherits = "release"
+debug = true

@@ -1,0 +1,8 @@
+[package]
+name = "theano-cuda-kernels"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "CUDA kernel compilation for the Theano deep learning framework"
+
+[dependencies]

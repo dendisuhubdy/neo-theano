@@ -1,0 +1,13 @@
+[package]
+name = "theano-types"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Core types for the Theano deep learning framework: DType, Shape, Device, Layout"
+
+[dependencies]
+half = { workspace = true }
+num-traits = { workspace = true }
+num-complex = { workspace = true }
+thiserror = { workspace = true }
+bytemuck = { workspace = true }

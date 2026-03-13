@@ -1,0 +1,20 @@
+[package]
+name = "theano-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Core tensor implementation for the Theano deep learning framework"
+
+[dependencies]
+theano-types = { workspace = true }
+theano-backend = { workspace = true }
+parking_lot = { workspace = true }
+smallvec = { workspace = true }
+rand = { workspace = true }
+rand_distr = { workspace = true }
+half = { workspace = true }
+num-traits = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+approx = "0.5"

@@ -1,0 +1,31 @@
+[package]
+name = "theano"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Neo Theano: A PyTorch-compatible deep learning framework in Rust"
+
+[features]
+default = ["cpu"]
+cpu = ["theano-cpu"]
+cuda = ["theano-cuda"]
+rocm = ["theano-rocm"]
+metal = ["theano-metal"]
+wgpu-backend = ["theano-wgpu"]
+oneapi = ["theano-oneapi"]
+full = ["cpu", "cuda", "rocm", "metal", "wgpu-backend", "oneapi"]
+
+[dependencies]
+theano-types = { workspace = true }
+theano-core = { workspace = true }
+theano-backend = { workspace = true }
+theano-cpu = { workspace = true, optional = true }
+theano-cuda = { workspace = true, optional = true }
+theano-rocm = { workspace = true, optional = true }
+theano-metal = { workspace = true, optional = true }
+theano-wgpu = { workspace = true, optional = true }
+theano-oneapi = { workspace = true, optional = true }
+theano-autograd = { workspace = true }
+theano-nn = { workspace = true }
+theano-optim = { workspace = true }
+theano-data = { workspace = true }

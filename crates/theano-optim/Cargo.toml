@@ -1,0 +1,13 @@
+[package]
+name = "theano-optim"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Optimizers for the Theano deep learning framework"
+
+[dependencies]
+theano-types = { workspace = true }
+theano-core = { workspace = true }
+theano-autograd = { workspace = true }
+theano-nn = { workspace = true }
+thiserror = { workspace = true }

@@ -1,0 +1,10 @@
+[package]
+name = "theano-backend"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Backend trait abstractions for the Theano deep learning framework"
+
+[dependencies]
+theano-types = { workspace = true }
+thiserror = { workspace = true }
