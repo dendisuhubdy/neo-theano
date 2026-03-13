@@ -18,6 +18,9 @@
 //! RUSTFLAGS="-C lto=fat" cargo +nightly build --features nightly-autodiff
 //! ```
 
+pub mod module;
+pub mod pytorch_api;
+
 // ============================================================================
 // SECTION 1: What the nightly API looks like (cfg-gated)
 // ============================================================================
