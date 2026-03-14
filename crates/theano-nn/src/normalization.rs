@@ -61,37 +61,34 @@ impl LayerNorm {
 
 impl Module for LayerNorm {
     fn forward(&self, input: &Variable) -> Variable {
-        // Normalize over the last len(normalized_shape) dimensions
-        let ndim = input.tensor().ndim();
+        let shape = input.tensor().shape().to_vec();
+        let ndim = shape.len();
         let norm_dims = self.normalized_shape.len();
         let reduce_start = ndim - norm_dims;
-
-        // Flatten the normalized dims, compute mean and variance
-        let data = input.tensor().to_vec_f64().unwrap();
-        let shape = input.tensor().shape().to_vec();
 
         let outer_size: usize = shape[..reduce_start].iter().product();
         let inner_size: usize = shape[reduce_start..].iter().product();
 
-        let mut output = vec![0.0f64; data.len()];
-        let weight_data = self.weight.tensor().to_vec_f64().unwrap();
-        let bias_data = self.bias.tensor().to_vec_f64().unwrap();
+        // Reshape to [outer, inner] for mean/var computation
+        let flat = input.reshape(&[outer_size, inner_size]).unwrap();
+        let mean = flat.mean_dim(1, true).unwrap();
+        let diff = flat.sub(&mean).unwrap();
+        let var = diff.mul(&diff).unwrap().mean_dim(1, true).unwrap();
+        let eps = Variable::new(Tensor::full(&[1, 1], self.eps));
+        let std = var.add(&eps).unwrap().sqrt().unwrap();
+        let normalized = diff.div(&std).unwrap();
 
-        for i in 0..outer_size {
-            let offset = i * inner_size;
-            let slice = &data[offset..offset + inner_size];
+        // Reshape back to original shape
+        let normalized = normalized.reshape(&shape).unwrap();
 
-            let mean: f64 = slice.iter().sum::<f64>() / inner_size as f64;
-            let var: f64 = slice.iter().map(|x| (x - mean) * (x - mean)).sum::<f64>() / inner_size as f64;
-            let std = (var + self.eps).sqrt();
+        // Apply affine: weight and bias have shape normalized_shape
+        // Need to broadcast: prepend 1s for outer dims
+        let mut broadcast_shape = vec![1usize; reduce_start];
+        broadcast_shape.extend_from_slice(&self.normalized_shape);
+        let weight = self.weight.reshape(&broadcast_shape).unwrap();
+        let bias = self.bias.reshape(&broadcast_shape).unwrap();
 
-            for j in 0..inner_size {
-                let normalized = (slice[j] - mean) / std;
-                output[offset + j] = normalized * weight_data[j] + bias_data[j];
-            }
-        }
-
-        Variable::new(Tensor::from_slice(&output, &shape))
+        normalized.mul(&weight).unwrap().add(&bias).unwrap()
     }
 
     fn parameters(&self) -> Vec<Variable> {
@@ -161,51 +158,28 @@ impl Module for GroupNorm {
         assert_eq!(c, self.num_channels);
 
         let spatial: usize = shape[2..].iter().product();
-        let channels_per_group = c / self.num_groups;
+        let cpg = c / self.num_groups;
+        let group_size = cpg * spatial;
 
-        let data = input.tensor().to_vec_f64().unwrap();
-        let weight_data = self.weight.tensor().to_vec_f64().unwrap();
-        let bias_data = self.bias.tensor().to_vec_f64().unwrap();
-        let mut output = vec![0.0f64; data.len()];
+        // Reshape to [N, G, cpg*spatial] for per-group normalization
+        let reshaped = input.reshape(&[n, self.num_groups, group_size]).unwrap();
+        let mean = reshaped.mean_dim(2, true).unwrap();
+        let diff = reshaped.sub(&mean).unwrap();
+        let var = diff.mul(&diff).unwrap().mean_dim(2, true).unwrap();
+        let eps = Variable::new(Tensor::full(&[1, 1, 1], self.eps));
+        let std = var.add(&eps).unwrap().sqrt().unwrap();
+        let normalized = diff.div(&std).unwrap();
 
-        for batch in 0..n {
-            for g in 0..self.num_groups {
-                let ch_start = g * channels_per_group;
-                let ch_end = ch_start + channels_per_group;
+        // Reshape back to original shape
+        let normalized = normalized.reshape(&shape).unwrap();
 
-                // Gather all values in this group
-                let mut sum = 0.0f64;
-                let mut count = 0;
-                for ch in ch_start..ch_end {
-                    for s in 0..spatial {
-                        let idx = batch * c * spatial + ch * spatial + s;
-                        sum += data[idx];
-                        count += 1;
-                    }
-                }
-                let mean = sum / count as f64;
+        // Apply per-channel affine: weight/bias are [C], broadcast to [1, C, 1, ...]
+        let mut weight_shape = vec![1usize; shape.len()];
+        weight_shape[1] = c;
+        let weight = self.weight.reshape(&weight_shape).unwrap();
+        let bias = self.bias.reshape(&weight_shape).unwrap();
 
-                let mut var_sum = 0.0f64;
-                for ch in ch_start..ch_end {
-                    for s in 0..spatial {
-                        let idx = batch * c * spatial + ch * spatial + s;
-                        var_sum += (data[idx] - mean) * (data[idx] - mean);
-                    }
-                }
-                let var = var_sum / count as f64;
-                let std = (var + self.eps).sqrt();
-
-                for ch in ch_start..ch_end {
-                    for s in 0..spatial {
-                        let idx = batch * c * spatial + ch * spatial + s;
-                        let normalized = (data[idx] - mean) / std;
-                        output[idx] = normalized * weight_data[ch] + bias_data[ch];
-                    }
-                }
-            }
-        }
-
-        Variable::new(Tensor::from_slice(&output, &shape))
+        normalized.mul(&weight).unwrap().add(&bias).unwrap()
     }
 
     fn parameters(&self) -> Vec<Variable> {

@@ -1,7 +1,10 @@
 //! 1D Convolution layer.
 
+use std::sync::Arc;
+
 use theano_autograd::Variable;
 use theano_core::Tensor;
+use theano_core::tensor::GradFn;
 use theano_types::{Device, Result};
 
 use crate::init;
@@ -53,9 +56,7 @@ impl Conv1d {
             bias,
         }
     }
-    /// Move this layer to a different device, returning a new Conv1d layer.
-    ///
-    /// Like `layer.to(device)` in PyTorch.
+
     pub fn to(&self, device: &Device) -> Result<Self> {
         let weight = self.weight.to(device)?;
         let bias = match &self.bias {
@@ -73,12 +74,10 @@ impl Conv1d {
         })
     }
 
-    /// Move to CPU.
     pub fn cpu(&self) -> Result<Self> {
         self.to(&Device::Cpu)
     }
 
-    /// Move to CUDA device 0.
     pub fn cuda(&self) -> Result<Self> {
         self.to(&Device::Cuda(0))
     }
@@ -106,8 +105,7 @@ impl Module for Conv1d {
                             let il = (ol * self.stride + k) as isize - self.padding as isize;
                             if il >= 0 && (il as usize) < l_in {
                                 let in_idx = batch * c_in * l_in + ci * l_in + il as usize;
-                                let w_idx =
-                                    co * c_in * self.kernel_size + ci * self.kernel_size + k;
+                                let w_idx = co * c_in * self.kernel_size + ci * self.kernel_size + k;
                                 val += input_data[in_idx] * weight_data[w_idx];
                             }
                         }
@@ -115,16 +113,28 @@ impl Module for Conv1d {
                     if let Some(ref bias) = self.bias {
                         val += bias.tensor().to_vec_f64().unwrap()[co];
                     }
-                    let out_idx = batch * self.out_channels * l_out + co * l_out + ol;
-                    output_data[out_idx] = val;
+                    output_data[batch * self.out_channels * l_out + co * l_out + ol] = val;
                 }
             }
         }
 
-        Variable::new(Tensor::from_slice(
-            &output_data,
-            &[n, self.out_channels, l_out],
-        ))
+        let output_tensor = Tensor::from_slice(&output_data, &[n, self.out_channels, l_out]);
+        let grad_fn = Arc::new(Conv1dBackward {
+            input_tensor: input.tensor().detach(),
+            weight_tensor: self.weight.tensor().detach(),
+            has_bias: self.bias.is_some(),
+            stride: self.stride,
+            padding: self.padding,
+            kernel_size: self.kernel_size,
+            in_channels: self.in_channels,
+            out_channels: self.out_channels,
+        });
+
+        let mut inputs = vec![input.clone(), self.weight.clone()];
+        if let Some(ref bias) = self.bias {
+            inputs.push(bias.clone());
+        }
+        Variable::from_op_public(output_tensor, grad_fn, inputs)
     }
 
     fn parameters(&self) -> Vec<Variable> {
@@ -142,6 +152,72 @@ impl Module for Conv1d {
         }
         params
     }
+}
+
+struct Conv1dBackward {
+    input_tensor: Tensor,
+    weight_tensor: Tensor,
+    has_bias: bool,
+    stride: usize,
+    padding: usize,
+    kernel_size: usize,
+    in_channels: usize,
+    out_channels: usize,
+}
+
+impl GradFn for Conv1dBackward {
+    fn backward(&self, grad_output: &[Tensor]) -> Vec<Option<Tensor>> {
+        let grad = &grad_output[0];
+        let grad_data = grad.to_vec_f64().unwrap();
+        let input_data = self.input_tensor.to_vec_f64().unwrap();
+        let weight_data = self.weight_tensor.to_vec_f64().unwrap();
+
+        let in_shape = self.input_tensor.shape();
+        let (n, c_in, l_in) = (in_shape[0], in_shape[1], in_shape[2]);
+        let l_out = grad.shape()[2];
+        let ks = self.kernel_size;
+
+        let mut grad_weight = vec![0.0f64; self.out_channels * c_in * ks];
+        let mut grad_input = vec![0.0f64; n * c_in * l_in];
+
+        for batch in 0..n {
+            for co in 0..self.out_channels {
+                for ol in 0..l_out {
+                    let g = grad_data[batch * self.out_channels * l_out + co * l_out + ol];
+                    for ci in 0..c_in {
+                        for k in 0..ks {
+                            let il = (ol * self.stride + k) as isize - self.padding as isize;
+                            if il >= 0 && (il as usize) < l_in {
+                                let in_idx = batch * c_in * l_in + ci * l_in + il as usize;
+                                let w_idx = co * c_in * ks + ci * ks + k;
+                                grad_weight[w_idx] += g * input_data[in_idx];
+                                grad_input[in_idx] += weight_data[w_idx] * g;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let gi = Tensor::from_slice(&grad_input, &[n, c_in, l_in]);
+        let gw = Tensor::from_slice(&grad_weight, &[self.out_channels, c_in, ks]);
+
+        if self.has_bias {
+            let mut grad_bias = vec![0.0f64; self.out_channels];
+            for batch in 0..n {
+                for co in 0..self.out_channels {
+                    for ol in 0..l_out {
+                        grad_bias[co] += grad_data[batch * self.out_channels * l_out + co * l_out + ol];
+                    }
+                }
+            }
+            vec![Some(gi), Some(gw), Some(Tensor::from_slice(&grad_bias, &[self.out_channels]))]
+        } else {
+            vec![Some(gi), Some(gw)]
+        }
+    }
+
+    fn name(&self) -> &str { "Conv1dBackward" }
 }
 
 #[cfg(test)]
@@ -183,6 +259,17 @@ mod tests {
         for param in conv_back.parameters() {
             assert_eq!(param.device(), &Device::Cpu);
         }
+    }
+
+    #[test]
+    fn test_conv1d_backward() {
+        let conv = Conv1d::with_options(1, 1, 3, 1, 0, false);
+        let input = Variable::requires_grad(Tensor::ones(&[1, 1, 5]));
+        let output = conv.forward(&input);
+        let loss = output.sum().unwrap();
+        loss.backward();
+        assert!(input.grad().is_some());
+        assert!(conv.parameters()[0].grad().is_some());
     }
 
     #[test]

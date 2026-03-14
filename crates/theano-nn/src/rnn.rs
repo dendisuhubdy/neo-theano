@@ -149,50 +149,26 @@ impl LSTMCell {
     pub fn forward_cell(&self, input: &Variable, h: &Variable, c: &Variable) -> (Variable, Variable) {
         let w_ih_t = self.w_ih.t().unwrap();
         let w_hh_t = self.w_hh.t().unwrap();
+        let hs = self.hidden_size as i64;
 
         let gates = input.matmul(&w_ih_t).unwrap()
             .add(&self.b_ih).unwrap()
             .add(&h.matmul(&w_hh_t).unwrap()).unwrap()
             .add(&self.b_hh).unwrap();
 
-        // Split into 4 gates: i, f, g, o
-        let gates_data = gates.tensor().to_vec_f64().unwrap();
-        let batch = input.tensor().shape()[0];
-        let hs = self.hidden_size;
+        // Split into 4 gates using narrow (all Variable ops)
+        let i_gate = gates.narrow(1, 0, hs).unwrap().sigmoid().unwrap();
+        let f_gate = gates.narrow(1, hs, hs).unwrap().sigmoid().unwrap();
+        let g_gate = gates.narrow(1, 2 * hs, hs).unwrap().tanh().unwrap();
+        let o_gate = gates.narrow(1, 3 * hs, hs).unwrap().sigmoid().unwrap();
 
-        let mut i_data = vec![0.0f64; batch * hs];
-        let mut f_data = vec![0.0f64; batch * hs];
-        let mut g_data = vec![0.0f64; batch * hs];
-        let mut o_data = vec![0.0f64; batch * hs];
+        // c' = f * c + i * g
+        let new_c = f_gate.mul(c).unwrap().add(&i_gate.mul(&g_gate).unwrap()).unwrap();
+        // h' = o * tanh(c')
+        let new_h = o_gate.mul(&new_c.tanh().unwrap()).unwrap();
 
-        for b in 0..batch {
-            for j in 0..hs {
-                let base = b * 4 * hs;
-                i_data[b * hs + j] = sigmoid(gates_data[base + j]);
-                f_data[b * hs + j] = sigmoid(gates_data[base + hs + j]);
-                g_data[b * hs + j] = gates_data[base + 2 * hs + j].tanh();
-                o_data[b * hs + j] = sigmoid(gates_data[base + 3 * hs + j]);
-            }
-        }
-
-        let c_data = c.tensor().to_vec_f64().unwrap();
-        let new_c: Vec<f64> = (0..batch * hs).map(|i| {
-            f_data[i] * c_data[i] + i_data[i] * g_data[i]
-        }).collect();
-
-        let new_h: Vec<f64> = (0..batch * hs).map(|i| {
-            o_data[i] * new_c[i].tanh()
-        }).collect();
-
-        (
-            Variable::new(Tensor::from_slice(&new_h, &[batch, hs])),
-            Variable::new(Tensor::from_slice(&new_c, &[batch, hs])),
-        )
+        (new_h, new_c)
     }
-}
-
-fn sigmoid(x: f64) -> f64 {
-    1.0 / (1.0 + (-x).exp())
 }
 
 impl Module for LSTMCell {

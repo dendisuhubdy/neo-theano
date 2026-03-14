@@ -1,7 +1,10 @@
 //! Convolutional layers.
 
+use std::sync::Arc;
+
 use theano_autograd::Variable;
 use theano_core::Tensor;
+use theano_core::tensor::GradFn;
 use theano_types::{Device, Result};
 
 use crate::init;
@@ -146,8 +149,6 @@ impl Module for Conv2d {
         let kh = self.kernel_size.0;
         let kw = self.kernel_size.1;
 
-        // Naive convolution via im2col-like approach
-        // For each output position, gather the input patch and dot with kernel
         let input_data = input.tensor().to_vec_f64().unwrap();
         let weight_data = self.weight.tensor().to_vec_f64().unwrap();
 
@@ -161,48 +162,42 @@ impl Module for Conv2d {
                         for ci in 0..c_in {
                             for kh_i in 0..kh {
                                 for kw_i in 0..kw {
-                                    let ih = oh * self.stride.0 + kh_i;
-                                    let iw = ow * self.stride.1 + kw_i;
-                                    let ih = ih as isize - self.padding.0 as isize;
-                                    let iw = iw as isize - self.padding.1 as isize;
-
+                                    let ih = (oh * self.stride.0 + kh_i) as isize - self.padding.0 as isize;
+                                    let iw = (ow * self.stride.1 + kw_i) as isize - self.padding.1 as isize;
                                     if ih >= 0 && ih < h_in as isize && iw >= 0 && iw < w_in as isize {
-                                        let ih = ih as usize;
-                                        let iw = iw as usize;
-                                        let in_idx = batch * c_in * h_in * w_in
-                                            + ci * h_in * w_in
-                                            + ih * w_in
-                                            + iw;
-                                        let w_idx = co * c_in * kh * kw
-                                            + ci * kh * kw
-                                            + kh_i * kw
-                                            + kw_i;
+                                        let in_idx = batch * c_in * h_in * w_in + ci * h_in * w_in + ih as usize * w_in + iw as usize;
+                                        let w_idx = co * c_in * kh * kw + ci * kh * kw + kh_i * kw + kw_i;
                                         val += input_data[in_idx] * weight_data[w_idx];
                                     }
                                 }
                             }
                         }
-
-                        // Add bias
                         if let Some(ref bias) = self.bias {
-                            let bias_data = bias.tensor().to_vec_f64().unwrap();
-                            val += bias_data[co];
+                            val += bias.tensor().to_vec_f64().unwrap()[co];
                         }
-
-                        let out_idx = batch * self.out_channels * h_out * w_out
-                            + co * h_out * w_out
-                            + oh * w_out
-                            + ow;
-                        output_data[out_idx] = val;
+                        output_data[batch * self.out_channels * h_out * w_out + co * h_out * w_out + oh * w_out + ow] = val;
                     }
                 }
             }
         }
 
-        Variable::new(Tensor::from_slice(
-            &output_data,
-            &[n, self.out_channels, h_out, w_out],
-        ))
+        let output_tensor = Tensor::from_slice(&output_data, &[n, self.out_channels, h_out, w_out]);
+        let grad_fn = Arc::new(Conv2dBackward {
+            input_tensor: input.tensor().detach(),
+            weight_tensor: self.weight.tensor().detach(),
+            has_bias: self.bias.is_some(),
+            stride: self.stride,
+            padding: self.padding,
+            kernel_size: self.kernel_size,
+            in_channels: self.in_channels,
+            out_channels: self.out_channels,
+        });
+
+        let mut inputs = vec![input.clone(), self.weight.clone()];
+        if let Some(ref bias) = self.bias {
+            inputs.push(bias.clone());
+        }
+        Variable::from_op_public(output_tensor, grad_fn, inputs)
     }
 
     fn parameters(&self) -> Vec<Variable> {
@@ -220,6 +215,102 @@ impl Module for Conv2d {
         }
         params
     }
+}
+
+struct Conv2dBackward {
+    input_tensor: Tensor,
+    weight_tensor: Tensor,
+    has_bias: bool,
+    stride: (usize, usize),
+    padding: (usize, usize),
+    kernel_size: (usize, usize),
+    in_channels: usize,
+    out_channels: usize,
+}
+
+impl GradFn for Conv2dBackward {
+    fn backward(&self, grad_output: &[Tensor]) -> Vec<Option<Tensor>> {
+        let grad = &grad_output[0];
+        let grad_data = grad.to_vec_f64().unwrap();
+        let input_data = self.input_tensor.to_vec_f64().unwrap();
+        let weight_data = self.weight_tensor.to_vec_f64().unwrap();
+
+        let in_shape = self.input_tensor.shape();
+        let (n, c_in, h_in, w_in) = (in_shape[0], in_shape[1], in_shape[2], in_shape[3]);
+        let out_shape = grad.shape();
+        let (h_out, w_out) = (out_shape[2], out_shape[3]);
+        let (kh, kw) = self.kernel_size;
+
+        // grad_weight[co][ci][kh_i][kw_i] = sum_n,oh,ow grad[n][co][oh][ow] * input[n][ci][ih][iw]
+        let mut grad_weight = vec![0.0f64; self.out_channels * c_in * kh * kw];
+        for batch in 0..n {
+            for co in 0..self.out_channels {
+                for oh in 0..h_out {
+                    for ow in 0..w_out {
+                        let g = grad_data[batch * self.out_channels * h_out * w_out + co * h_out * w_out + oh * w_out + ow];
+                        for ci in 0..c_in {
+                            for kh_i in 0..kh {
+                                for kw_i in 0..kw {
+                                    let ih = (oh * self.stride.0 + kh_i) as isize - self.padding.0 as isize;
+                                    let iw = (ow * self.stride.1 + kw_i) as isize - self.padding.1 as isize;
+                                    if ih >= 0 && ih < h_in as isize && iw >= 0 && iw < w_in as isize {
+                                        let in_idx = batch * c_in * h_in * w_in + ci * h_in * w_in + ih as usize * w_in + iw as usize;
+                                        grad_weight[co * c_in * kh * kw + ci * kh * kw + kh_i * kw + kw_i] += g * input_data[in_idx];
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // grad_input[n][ci][ih][iw] = sum_co,kh_i,kw_i weight[co][ci][kh_i][kw_i] * grad[n][co][oh][ow]
+        let mut grad_input = vec![0.0f64; n * c_in * h_in * w_in];
+        for batch in 0..n {
+            for co in 0..self.out_channels {
+                for oh in 0..h_out {
+                    for ow in 0..w_out {
+                        let g = grad_data[batch * self.out_channels * h_out * w_out + co * h_out * w_out + oh * w_out + ow];
+                        for ci in 0..c_in {
+                            for kh_i in 0..kh {
+                                for kw_i in 0..kw {
+                                    let ih = (oh * self.stride.0 + kh_i) as isize - self.padding.0 as isize;
+                                    let iw = (ow * self.stride.1 + kw_i) as isize - self.padding.1 as isize;
+                                    if ih >= 0 && ih < h_in as isize && iw >= 0 && iw < w_in as isize {
+                                        grad_input[batch * c_in * h_in * w_in + ci * h_in * w_in + ih as usize * w_in + iw as usize]
+                                            += weight_data[co * c_in * kh * kw + ci * kh * kw + kh_i * kw + kw_i] * g;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let grad_input_tensor = Tensor::from_slice(&grad_input, &[n, c_in, h_in, w_in]);
+        let grad_weight_tensor = Tensor::from_slice(&grad_weight, &[self.out_channels, c_in, kh, kw]);
+
+        if self.has_bias {
+            // grad_bias[co] = sum_n,oh,ow grad[n][co][oh][ow]
+            let mut grad_bias = vec![0.0f64; self.out_channels];
+            for batch in 0..n {
+                for co in 0..self.out_channels {
+                    for oh in 0..h_out {
+                        for ow in 0..w_out {
+                            grad_bias[co] += grad_data[batch * self.out_channels * h_out * w_out + co * h_out * w_out + oh * w_out + ow];
+                        }
+                    }
+                }
+            }
+            vec![Some(grad_input_tensor), Some(grad_weight_tensor), Some(Tensor::from_slice(&grad_bias, &[self.out_channels]))]
+        } else {
+            vec![Some(grad_input_tensor), Some(grad_weight_tensor)]
+        }
+    }
+
+    fn name(&self) -> &str { "Conv2dBackward" }
 }
 
 #[cfg(test)]
@@ -303,11 +394,6 @@ mod tests {
 
     #[test]
     fn test_conv2d_forward_correctness() {
-        // Test that Conv2d forward produces correct output values.
-        // Note: Conv2d uses raw scalar loops (im2col-like) rather than Variable ops,
-        // so autograd backward does not propagate through the convolution. A future
-        // implementation should rewrite forward using Variable matmul ops (im2col)
-        // to enable full gradient flow through conv layers.
         let conv = Conv2d::with_options(1, 1, (1, 1), (1, 1), (0, 0), false);
         let input = Variable::new(Tensor::from_slice(
             &[1.0, 2.0, 3.0, 4.0],
@@ -315,7 +401,18 @@ mod tests {
         ));
         let output = conv.forward(&input);
         assert_eq!(output.tensor().shape(), &[1, 1, 2, 2]);
-        // With 1x1 kernel and no bias, output = input * kernel_weight
         assert_eq!(output.tensor().numel(), 4);
+    }
+
+    #[test]
+    fn test_conv2d_backward() {
+        let conv = Conv2d::with_options(1, 1, (3, 3), (1, 1), (0, 0), false);
+        let input = Variable::requires_grad(Tensor::ones(&[1, 1, 5, 5]));
+        let output = conv.forward(&input);
+        let loss = output.sum().unwrap();
+        loss.backward();
+        // Both input and weight should have gradients
+        assert!(input.grad().is_some());
+        assert!(conv.parameters()[0].grad().is_some());
     }
 }
