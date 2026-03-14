@@ -131,6 +131,124 @@ let x = pool.forward(&x);
 // ... continue through the network
 ```
 
+## Compiler-Level Autodiff (Research)
+
+Neo Theano is exploring **compiler-level automatic differentiation** via Rust's experimental [`#[autodiff]`](https://github.com/rust-lang/rust/issues/124509) attribute (powered by [Enzyme](https://enzyme.mit.edu/)). Instead of building a tape at runtime, Enzyme generates backward functions at compile time from LLVM IR — eliminating tape allocation, indirect calls, and enabling whole-model fusion into a single GPU kernel.
+
+The framework maintains a **dual-mode architecture**: static graphs use Enzyme (compiled AD), dynamic graphs keep using the existing tape. Users opt in explicitly — zero change to the PyTorch API.
+
+### Benchmark Results (tape overhead, CPU)
+
+Measured via [Criterion.rs](https://bheisler.github.io/criterion.rs/) in `research/benchmarks/`. Compares tape-based AD (dynamic graph with node allocation, topological sort, indirect calls) vs compiled AD simulation (direct fused computation, no tape).
+
+#### Tape-based vs Compiled AD by module type
+
+| Module | Tape-based | Compiled (no tape) | Speedup |
+|---|---|---|---|
+| **MLP** 4x8x2 | 5.85μs | 1.31μs | **4.5x** |
+| **MLP** 16x32x4 | 280μs | 30.1μs | **9.3x** |
+| **MLP** 64x128x8 | 7.28ms | 1.26ms | **5.8x** |
+| **MLP** 128x256x16 | 64.8ms | 11.4ms | **5.7x** |
+| **Conv2d** 1c->4c 8x8 k3 | 103μs | 6.82μs | **15.1x** |
+| **Conv2d** 3c->16c 16x16 k3 | 6.70ms | 291μs | **23.0x** |
+| **Conv2d** 3c->32c 16x16 k5 | 29.4ms | 1.13ms | **26.0x** |
+| **LSTM** in=4 h=8 seq=4 | 135μs | 7.69μs | **17.5x** |
+| **LSTM** in=8 h=16 seq=8 | 1.08ms | 36.9μs | **29.3x** |
+| **LSTM** in=16 h=32 seq=8 | 4.55ms | 145μs | **31.5x** |
+| **BatchNorm** b=16 f=32 | 157μs | 5.89μs | **26.7x** |
+| **BatchNorm** b=64 f=128 | 2.82ms | 188μs | **15.0x** |
+| **Attention** seq=4 d=8 h=2 | 118μs | 2.82μs | **41.7x** |
+| **Attention** seq=8 d=16 h=4 | 923μs | 10.7μs | **86.0x** |
+| **Attention** seq=8 d=32 h=4 | 3.63ms | 35.7μs | **101.7x** |
+
+#### Dynamic graph (rebuild each iteration) vs Static graph (fixed topology)
+
+| Model | Dynamic (tape) | Static graph | Speedup |
+|---|---|---|---|
+| MLP 4x8x2 | 5.79μs | 761ns | **7.6x** |
+| MLP 16x32x4 | 280μs | 26.2μs | **10.7x** |
+| MLP 64x128x8 | 7.44ms | 742μs | **10.0x** |
+| MLP 128x256x16 | 69.9ms | 6.23ms | **11.2x** |
+
+Attention sees the largest speedups (42-102x) due to the highest ratio of small operations per logical step. Even without compiled AD, avoiding dynamic graph rebuild alone yields ~10x on medium models. Full analysis in [`research/DESIGN.md`](research/DESIGN.md).
+
+### Rust Autodiff vs PyTorch: Where Each Wins
+
+The benchmark numbers above measure one dimension — tape overhead — but the real comparison between compiled AD in Rust and PyTorch's interpreter-based approach spans several axes:
+
+#### Summary
+
+| Dimension | Rust Autodiff (Enzyme) | PyTorch (Eager + torch.compile) | Winner |
+|---|---|---|---|
+| Kernel launches per training step | 1-2 (fused) | 10-100+ (per-op dispatch) | Rust |
+| Memory predictability | Deterministic at compile time | Dynamic allocation, GC pressure | Rust |
+| GPU utilization | Near-peak (no bubbles between ops) | Bubble-filled (launch gaps, sync points) | Rust |
+| Gradient correctness | Impossible to write a wrong backward (you never write one) | Manual `backward()` impls, silent shape bugs | Rust |
+| Ecosystem breadth | Small (new framework) | Every paper has a PyTorch implementation | PyTorch |
+| Iteration speed | Recompile on every change | Change a line, re-run instantly | PyTorch |
+| Dynamic architectures | Requires explicit opt-out to tape mode | Graphs that change shape per-input work naturally | PyTorch |
+| Debugging | Compile errors, no runtime graph inspection | `pdb`, hooks, `register_hook`, tensor printing | PyTorch |
+| Multi-GPU / distributed | Manual (early stage) | DDP/FSDP/DeepSpeed, battle-tested at scale | PyTorch |
+| Pretrained model zoo | Minimal | Hugging Face, timm, torchvision — thousands of models | PyTorch |
+
+#### Where Rust autodiff wins decisively
+
+**Kernel launch overhead.** PyTorch dispatches each operation as a separate CUDA kernel — a `Linear` layer alone is a matmul kernel + bias add kernel + activation kernel, each with ~5-10μs launch overhead. Enzyme fuses the entire forward+backward pass into 1-2 kernels. For models with hundreds of small operations (attention, LSTMs), this is the difference between the GPU sitting idle 40% of the time and running at near-peak throughput.
+
+**Memory predictability.** PyTorch's tape grows dynamically during the forward pass, allocating `GradFn` nodes on the heap. Peak memory depends on input shape, batch size, and which operations trigger saves — it's hard to predict and hard to bound. Enzyme decides at compile time what to cache vs. recompute (automatic checkpointing). You know your memory footprint before you run.
+
+**GPU utilization.** Every CPU-GPU synchronization point (tape management, Python GIL, allocator) creates a bubble where the GPU has no work. PyTorch mitigates this with CUDA graphs and operator fusion, but the fundamental architecture has the CPU in the critical path. Compiled AD removes the CPU from the loop entirely for the forward+backward computation.
+
+**Correctness guarantees.** In PyTorch, every new operation needs a hand-written `backward()` function. Get the Jacobian wrong, and gradients silently diverge — the model trains but converges to garbage. Enzyme derives the backward pass from the forward pass by differentiating LLVM IR. If the forward pass is correct, the backward pass is correct by construction. This eliminates an entire class of bugs that are notoriously hard to catch (gradient errors often look like "the model just doesn't train well").
+
+**Inference latency.** For deployment, compiled AD produces a single optimized binary with no runtime framework overhead. No Python interpreter, no dynamic dispatch, no GC pauses. Latency is deterministic and minimal — critical for real-time applications (autonomous driving, trading, robotics).
+
+**Energy efficiency.** Fewer kernel launches, no interpreter overhead, and tighter GPU utilization translate directly to lower energy per training step. At scale (thousands of GPUs for weeks), this is a meaningful cost and carbon difference.
+
+#### Where PyTorch still wins
+
+**Ecosystem is the moat.** Every ML paper published in the last 5 years ships with PyTorch code. Hugging Face has 200k+ pretrained models. torchvision, torchaudio, torchtext provide ready-made data pipelines. This ecosystem took a decade to build and cannot be replicated by any new framework on technical merit alone.
+
+**Iteration speed is the lifeblood of research.** Change a layer, re-run in seconds. Add a `print(tensor.shape)` anywhere. Set a breakpoint in the backward pass. PyTorch's eager execution makes the gap between "idea" and "experiment" nearly zero. Compiled AD requires recompilation — fast in Rust, but fundamentally slower than "just re-run the script."
+
+**Dynamic architectures work naturally.** Tree-structured RNNs, pointer networks, models with input-dependent control flow — these rebuild a different computation graph every forward pass. PyTorch's tape handles this without any special annotation. Enzyme requires the computation to be statically known at compile time, so dynamic architectures must fall back to tape mode.
+
+**Debugging is interactive.** PyTorch lets you `print()` any tensor, set breakpoints in the backward pass via `register_hook`, inspect the computation graph at runtime, and use standard Python debugging tools. Compiled AD is a black box — you get the correct answer, but you can't step through the backward pass to understand why a particular gradient has a particular value.
+
+**Distributed training is battle-tested.** PyTorch's DDP, FSDP, and integrations with DeepSpeed/Megatron have been proven at billion-parameter scale across thousands of GPUs. This infrastructure took years of engineering to stabilize. New frameworks must rebuild this from scratch.
+
+**Community and hiring.** Practically every ML engineer knows PyTorch. Practically none know Rust autodiff. For organizations, this means PyTorch projects can hire from a deep talent pool, find answers on StackOverflow, and get support from a massive community.
+
+#### The convergence point
+
+PyTorch is moving toward what Rust autodiff does natively. `torch.compile` traces dynamic Python code into static graphs. Triton fuses operations into custom GPU kernels. CUDA Graphs eliminate kernel launch overhead. FlexAttention compiles attention variants at runtime. Each of these is an engineering effort to recover the performance that a compiled language gets for free.
+
+But PyTorch is doing this by **layering compilation on top of an interpreter**, which is inherently more fragile than starting from a compiled language:
+- `torch.compile` has graph breaks when it hits unsupported Python constructs
+- Triton kernels require manual tuning and a separate language
+- CUDA Graphs require careful management of memory addresses and stream ordering
+- Dynamic shapes force recompilation or fallback to eager mode
+
+Rust autodiff starts where PyTorch is trying to end up: a compiled language where the compiler sees the entire computation, can differentiate it, fuse it, and target any hardware backend. The tradeoff is that you lose the interpreter's flexibility — but if your model architecture is fixed (which it is for most production deployments), you never needed that flexibility in the first place.
+
+#### Pitfalls and honest limitations
+
+**Compile times scale with model size.** Enzyme differentiates the entire forward pass as a single LLVM function. For large models (billions of parameters, deeply nested layers), this can push compile times from seconds to minutes. PyTorch has no compile step for eager mode. `torch.compile` has similar scaling issues, but at least offers a fallback.
+
+**Nightly Rust dependency is a hard requirement.** `#[autodiff]` and `gpu_offload` are unstable features behind nightly-only flags. Nightly Rust can break between releases. For production systems that need stability guarantees, this is a real risk — you may need to pin a specific nightly version and maintain that pin.
+
+**Enzyme's Rust support is early-stage.** While Enzyme itself is mature (battle-tested in C/C++ for years at MIT), the Rust frontend is new. Edge cases in Rust's type system (traits, enums, complex generics) may not be fully supported. You may hit ICEs (internal compiler errors) on valid code.
+
+**No automatic mixed precision.** PyTorch's `autocast` transparently converts operations to FP16/BF16 where safe. Enzyme operates on whatever types the code uses. Mixed precision requires manual annotation — cast your tensors to `f16` explicitly, know which operations need `f32` for numerical stability.
+
+**Limited hardware backend support.** PyTorch runs on CUDA, ROCm, XLA (TPUs), MPS (Apple Silicon), and more — with vendor-optimized kernels for each. Enzyme targets LLVM backends, which covers NVPTX (CUDA) and AMDGPU but lacks the hand-tuned kernel libraries (cuDNN, cuBLAS) that PyTorch calls for critical operations like convolution and attention.
+
+**Debugging compiled gradients is hard.** When PyTorch's autograd gives a wrong gradient, you can set hooks, print intermediates, and trace the tape. When Enzyme gives a wrong gradient (rare, but possible due to aliasing issues or unsupported constructs), you're debugging LLVM IR. This requires a fundamentally different skillset.
+
+**The "two-language problem" reappears.** Research happens in Python/PyTorch. If you develop a new architecture in Rust autodiff, you can't share it with the broader ML community via a Jupyter notebook. You can't use it in Hugging Face. You can't compare against baselines that only exist in PyTorch. The friction of translating between ecosystems is real.
+
+**Graph-changing models require fallback.** Any model where the computation graph depends on the input (adaptive computation, early exit networks, mixture-of-experts routing) cannot use compiled AD for the dynamic portion. You need a fallback to tape-based AD, which means maintaining two code paths and understanding when each applies.
+
 ## Architecture
 
 Neo Theano is organized as a Rust workspace with focused crates:

@@ -10,7 +10,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Research: Compiler-level autodiff** (`research/`) — Enzyme (`#[autodiff]`) and GPU offload (`core::intrinsics::offload`) exploration
   - `enzyme-prototype/` — Module trait with `flatten_params`/`load_params` bridge for Enzyme, PyTorch-style API with transparent `CompiledModel` wrapper, numerical gradient verification (15 tests)
   - `offload-prototype/` — GPU offload integration patterns, memory transfer analysis (3 tests)
-  - `benchmarks/` — Criterion benchmarks showing 4.5–9.3x speedup from eliminating tape overhead on CPU; larger gains expected on GPU from kernel fusion
+  - `benchmarks/` — Criterion benchmarks across 6 module types: MLP (4.5–9.3x), Conv2d (15–26x), LSTM (17–31x), BatchNorm (15–27x), Attention (42–102x), plus dynamic-vs-static graph comparison (7.6–11.2x); larger gains expected on GPU from kernel fusion
   - `DESIGN.md` — Full architecture document: dual-mode AD (static graphs → Enzyme, dynamic graphs → existing tape)
   - Key design principle: **zero change to PyTorch API** — Enzyme is a transparent optimization layer underneath existing `Module` trait
 

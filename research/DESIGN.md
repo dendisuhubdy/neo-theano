@@ -178,6 +178,73 @@ Expected wall-clock speedup for typical models:
 - **Large models** (> 100M params): **1.5-3x** — compute dominates, but fusion still helps
 - **Custom ops / fine-grained ops**: **10-50x** — these suffer most from dispatch overhead
 
+### Empirical Benchmark Results (CPU, tape overhead simulation)
+
+All benchmarks run via Criterion.rs (`cargo bench` in `research/benchmarks/`).
+Measures the overhead of tape construction, node allocation, indirect calls, and topological sort
+vs direct fused computation (what Enzyme would generate).
+
+#### MLP (Linear + ReLU layers)
+
+| Model | Tape-based | Compiled (no tape) | Speedup |
+|---|---|---|---|
+| MLP 4x8x2 | 5.85μs | 1.31μs | **4.5x** |
+| MLP 16x32x4 | 280μs | 30.1μs | **9.3x** |
+| MLP 64x128x8 | 7.28ms | 1.26ms | **5.8x** |
+| MLP 128x256x16 | 64.8ms | 11.4ms | **5.7x** |
+
+#### Conv2d (Convolution + ReLU)
+
+| Config | Tape-based | Compiled (no tape) | Speedup |
+|---|---|---|---|
+| 1c->4c 8x8 k3 | 103μs | 6.82μs | **15.1x** |
+| 3c->16c 16x16 k3 | 6.70ms | 291μs | **23.0x** |
+| 3c->32c 16x16 k5 | 29.4ms | 1.13ms | **26.0x** |
+| 16c->32c 8x8 k3 | 13.2ms | 652μs | **20.2x** |
+
+#### LSTM Cell (4 gates: input, forget, cell, output)
+
+| Config | Tape-based | Compiled (no tape) | Speedup |
+|---|---|---|---|
+| in=4 h=8 seq=4 | 135μs | 7.69μs | **17.5x** |
+| in=8 h=16 seq=8 | 1.08ms | 36.9μs | **29.3x** |
+| in=16 h=32 seq=8 | 4.55ms | 145μs | **31.5x** |
+| in=32 h=64 seq=4 | 9.41ms | 410μs | **22.9x** |
+
+#### BatchNorm (mean, variance, normalize, scale+shift)
+
+| Config | Tape-based | Compiled (no tape) | Speedup |
+|---|---|---|---|
+| batch=8 features=16 | 38.3μs | 1.56μs | **24.6x** |
+| batch=16 features=32 | 157μs | 5.89μs | **26.7x** |
+| batch=32 features=64 | 609μs | 32.3μs | **18.9x** |
+| batch=64 features=128 | 2.82ms | 188μs | **15.0x** |
+
+#### Multi-Head Attention (Q/K/V projection + scaled dot-product)
+
+| Config | Tape-based | Compiled (no tape) | Speedup |
+|---|---|---|---|
+| seq=4 d=8 heads=2 | 118μs | 2.82μs | **41.7x** |
+| seq=8 d=16 heads=4 | 923μs | 10.7μs | **86.0x** |
+| seq=8 d=32 heads=4 | 3.63ms | 35.7μs | **101.7x** |
+
+#### Dynamic Graph (tape rebuilt each iteration) vs Static Graph (fixed topology, replay only)
+
+| Model | Dynamic (tape) | Static graph | Speedup |
+|---|---|---|---|
+| MLP 4x8x2 | 5.79μs | 761ns | **7.6x** |
+| MLP 16x32x4 | 280μs | 26.2μs | **10.7x** |
+| MLP 64x128x8 | 7.44ms | 742μs | **10.0x** |
+| MLP 128x256x16 | 69.9ms | 6.23ms | **11.2x** |
+
+**Key observations:**
+- **Attention sees the largest speedups** (42-102x) because it has the highest ratio of small ops (Q/K/V projections, score computation, softmax, weighted sum) per "logical step"
+- **LSTM and BatchNorm** (17-31x) also benefit heavily from many fine-grained ops per cell/feature
+- **Conv2d** (15-26x) benefits from eliminating per-spatial-position tape overhead in the nested convolution loops
+- **MLP** (4.5-9.3x) shows the baseline benefit from eliminating tape allocation and indirect calls
+- **Static vs dynamic graph** (7.6-11.2x) isolates the cost of graph *construction* — even without switching to compiled AD, avoiding graph rebuild gives a 10x win on medium models
+- Speedups generally peak at medium sizes where operation count is high enough for overhead to dominate but not so large that raw compute takes over
+
 ## Limitations and When NOT to Use Compiler AD
 
 1. **Dynamic architectures** — if the computation graph changes per input (tree-RNNs, dynamic routing), use tape-based AD

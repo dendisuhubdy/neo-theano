@@ -40,6 +40,21 @@ let output = model.forward(&x);
 output.backward();
 ```
 
+## Benchmark Results Summary
+
+Tape overhead eliminated by compiled AD, measured across module types:
+
+| Module | Speedup Range | Why |
+|---|---|---|
+| MLP (Linear+ReLU) | 4.5–9.3x | Baseline tape allocation + indirect calls |
+| Conv2d | 15–26x | Nested spatial loops amplify per-op overhead |
+| LSTM | 17–31x | 4 gates per cell = 4x the tape nodes per timestep |
+| BatchNorm | 15–27x | Many small ops (mean, var, normalize, scale) |
+| Attention | 42–102x | Q/K/V projections + score computation = highest op density |
+| Static vs Dynamic graph | 7.6–11.2x | Cost of graph construction alone (no AD change) |
+
+Full results with exact timings: see [DESIGN.md](DESIGN.md#empirical-benchmark-results-cpu-tape-overhead-simulation).
+
 ## Running
 
 ```bash
