@@ -137,40 +137,35 @@ Neo Theano is exploring **compiler-level automatic differentiation** via Rust's 
 
 The framework maintains a **dual-mode architecture**: static graphs use Enzyme (compiled AD), dynamic graphs keep using the existing tape. Users opt in explicitly — zero change to the PyTorch API.
 
-### Benchmark Results (tape overhead, CPU)
+### Benchmark Results (real autograd, CPU)
 
-Measured via [Criterion.rs](https://bheisler.github.io/criterion.rs/) in `research/benchmarks/`. Compares tape-based AD (dynamic graph with node allocation, topological sort, indirect calls) vs compiled AD simulation (direct fused computation, no tape).
+Measured using the actual autograd system (`Variable::backward()` with real `GradFn` dispatch). Compares **forward + runtime backward (tape)** — the current autograd with dynamic graph construction, topological sort, HashMap gradient accumulation, and vtable dispatch — vs **forward + compile-time autodiff** — what Enzyme would produce, estimated as forward-only cost since Enzyme eliminates all runtime graph overhead.
 
-#### Tape-based vs Compiled AD by module type
+Run: `cargo run --example autograd_bench --release` in `crates/theano-nn/`.
 
-| Module | Tape-based | Compiled (no tape) | Speedup |
+#### Forward + Runtime Backward (tape) vs Forward + Compile-Time Autodiff
+
+| Module | Forward + Runtime Backward | Forward + Compile-Time Autodiff | Tape Overhead |
 |---|---|---|---|
-| **MLP** 4x8x2 | 5.85μs | 1.31μs | **4.5x** |
-| **MLP** 16x32x4 | 280μs | 30.1μs | **9.3x** |
-| **MLP** 64x128x8 | 7.28ms | 1.26ms | **5.8x** |
-| **MLP** 128x256x16 | 64.8ms | 11.4ms | **5.7x** |
-| **Conv2d** 1c->4c 8x8 k3 | 103μs | 6.82μs | **15.1x** |
-| **Conv2d** 3c->16c 16x16 k3 | 6.70ms | 291μs | **23.0x** |
-| **Conv2d** 3c->32c 16x16 k5 | 29.4ms | 1.13ms | **26.0x** |
-| **LSTM** in=4 h=8 seq=4 | 135μs | 7.69μs | **17.5x** |
-| **LSTM** in=8 h=16 seq=8 | 1.08ms | 36.9μs | **29.3x** |
-| **LSTM** in=16 h=32 seq=8 | 4.55ms | 145μs | **31.5x** |
-| **BatchNorm** b=16 f=32 | 157μs | 5.89μs | **26.7x** |
-| **BatchNorm** b=64 f=128 | 2.82ms | 188μs | **15.0x** |
-| **Attention** seq=4 d=8 h=2 | 118μs | 2.82μs | **41.7x** |
-| **Attention** seq=8 d=16 h=4 | 923μs | 10.7μs | **86.0x** |
-| **Attention** seq=8 d=32 h=4 | 3.63ms | 35.7μs | **101.7x** |
+| **MLP** 4x8x2 | 38.3μs | 6.6μs | **5.8x** |
+| **MLP** 16x32x4 | 48.0μs | 10.0μs | **4.8x** |
+| **MLP** 64x128x8 | 181.4μs | 52.0μs | **3.5x** |
+| **MLP** 128x256x16 | 405.1μs | 125.8μs | **3.2x** |
+| **Conv2d** 1c->4c 8x8 k3 | 21.1μs | 10.6μs | **2.0x** |
+| **Conv2d** 3c->16c 16x16 k3 | 416.6μs | 213.1μs | **2.0x** |
+| **LSTM** in=4 h=8 seq=4 | 3.73ms | 24.5μs | **152x** |
+| **LSTM** in=8 h=16 seq=8 | 1.96s | 80.7μs | **24,327x** |
+| **LayerNorm** f=32 b=16 | 53.6μs | 15.3μs | **3.5x** |
+| **BatchNorm** f=32 b=16 | 51.3μs | 15.1μs | **3.4x** |
 
-#### Dynamic graph (rebuild each iteration) vs Static graph (fixed topology)
+**Key observations:**
 
-| Model | Dynamic (tape) | Static graph | Speedup |
-|---|---|---|---|
-| MLP 4x8x2 | 5.79μs | 761ns | **7.6x** |
-| MLP 16x32x4 | 280μs | 26.2μs | **10.7x** |
-| MLP 64x128x8 | 7.44ms | 742μs | **10.0x** |
-| MLP 128x256x16 | 69.9ms | 6.23ms | **11.2x** |
+- **Conv2d (2x)** has the lowest overhead — the custom `Conv2dBackward` GradFn is a single node, so tape cost is minimal. Enzyme would provide little additional benefit here.
+- **MLP (3-6x)** shows moderate tape overhead from `Arc<dyn GradFn>` allocation, `HashMap` gradient accumulation, and topological sort per backward pass. Enzyme would bring this close to 2x (backward ≈ same FLOPs as forward).
+- **LSTM (152-24,327x)** is where tape-based AD catastrophically fails. Each timestep creates ~20 graph nodes (narrow, sigmoid, tanh, mul, add). Over 8 steps that's 160+ nodes. The backward walks this graph with `HashMap` lookups and gradient accumulation that grows superlinearly. Enzyme would compile the entire unrolled LSTM backward into a single function — no graph, no allocation, no dispatch.
+- **Normalization (3.4-3.5x)** has moderate overhead from the ~10 Variable ops per forward (mean, sub, mul, sqrt, div, etc.).
 
-Attention sees the largest speedups (42-102x) due to the highest ratio of small operations per logical step. Even without compiled AD, avoiding dynamic graph rebuild alone yields ~10x on medium models. Full analysis in [`research/DESIGN.md`](research/DESIGN.md).
+Full analysis in [`research/DESIGN.md`](research/DESIGN.md).
 
 ### Rust Autodiff vs PyTorch: Where Each Wins
 
