@@ -167,6 +167,21 @@ Run: `cargo run --example autograd_bench --release` in `crates/theano-nn/`.
 
 Full analysis in [`research/DESIGN.md`](research/DESIGN.md).
 
+#### Reproducing the benchmarks
+
+```bash
+# Quick run (release mode, prints to stdout)
+./scripts/bench_autograd.sh
+
+# Save results with system metadata (CPU, Rust version, timestamp)
+./scripts/bench_autograd.sh --save
+
+# Or run the example directly
+cargo run --example autograd_bench --release
+```
+
+Results are measured on a single thread, CPU-only, with 3 warmup iterations per benchmark. The `--save` flag writes timestamped results to `benchmarks/results/` for comparison across runs.
+
 ### Rust Autodiff vs PyTorch: Where Each Wins
 
 The benchmark numbers above measure one dimension — tape overhead — but the real comparison between compiled AD in Rust and PyTorch's interpreter-based approach spans several axes:
