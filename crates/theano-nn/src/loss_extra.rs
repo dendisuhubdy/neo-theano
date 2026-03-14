@@ -41,22 +41,25 @@ impl SmoothL1Loss {
     pub fn forward(&self, prediction: &Variable, target: &Variable) -> Variable {
         let diff = prediction.sub(target).unwrap();
         let abs_diff = diff.abs().unwrap();
-        let abs_data = abs_diff.tensor().to_vec_f64().unwrap();
         let beta = self.beta;
 
-        let result: Vec<f64> = abs_data
-            .iter()
-            .map(|&x| {
-                if x < beta {
-                    0.5 * x * x / beta
-                } else {
-                    x - 0.5 * beta
-                }
-            })
-            .collect();
+        // Quadratic region: 0.5 * x^2 / beta (where |diff| < beta)
+        let quadratic = diff.mul(&diff).unwrap().mul_scalar(0.5 / beta).unwrap();
+        // Linear region: |diff| - 0.5 * beta
+        let linear = abs_diff.add_scalar(-0.5 * beta).unwrap();
 
-        let t = Variable::new(Tensor::from_slice(&result, abs_diff.tensor().shape()));
-        t.mean().unwrap()
+        // Condition: |diff| < beta → use quadratic, else linear
+        let threshold = Variable::new(Tensor::full(abs_diff.tensor().shape(), beta));
+        let cond = threshold.sub(&abs_diff).unwrap().relu().unwrap(); // >0 where |diff| < beta
+        // Build a mask: 1 where |diff| < beta, 0 otherwise
+        let zero = Variable::new(Tensor::zeros(abs_diff.tensor().shape()));
+        let ones = Variable::new(Tensor::ones(abs_diff.tensor().shape()));
+        let mask = ones.where_cond(&cond, &zero).unwrap(); // 1 where cond > 0
+
+        // result = mask * quadratic + (1 - mask) * linear
+        let inv_mask = ones.sub(&mask).unwrap();
+        let result = mask.mul(&quadratic).unwrap().add(&inv_mask.mul(&linear).unwrap()).unwrap();
+        result.mean().unwrap()
     }
 }
 
@@ -76,21 +79,16 @@ impl BCELoss {
     }
 
     pub fn forward(&self, input: &Variable, target: &Variable) -> Variable {
-        let eps = 1e-12;
-        let input_data = input.tensor().to_vec_f64().unwrap();
-        let target_data = target.tensor().to_vec_f64().unwrap();
-
-        let result: Vec<f64> = input_data
-            .iter()
-            .zip(target_data.iter())
-            .map(|(&p, &t)| {
-                let p = p.clamp(eps, 1.0 - eps);
-                -(t * p.ln() + (1.0 - t) * (1.0 - p).ln())
-            })
-            .collect();
-
-        let t = Variable::new(Tensor::from_slice(&result, input.tensor().shape()));
-        t.mean().unwrap()
+        // BCE = -[target * log(input) + (1 - target) * log(1 - input)]
+        let clamped = input.clamp(1e-12, 1.0 - 1e-12).unwrap();
+        let log_p = clamped.log().unwrap();
+        let ones = Variable::new(Tensor::ones(input.tensor().shape()));
+        let log_1mp = ones.sub(&clamped).unwrap().log().unwrap();
+        let ones_t = Variable::new(Tensor::ones(target.tensor().shape()));
+        let bce = target.mul(&log_p).unwrap()
+            .add(&ones_t.sub(target).unwrap().mul(&log_1mp).unwrap()).unwrap()
+            .neg().unwrap();
+        bce.mean().unwrap()
     }
 }
 
@@ -110,21 +108,24 @@ impl BCEWithLogitsLoss {
     }
 
     pub fn forward(&self, input: &Variable, target: &Variable) -> Variable {
-        let input_data = input.tensor().to_vec_f64().unwrap();
-        let target_data = target.tensor().to_vec_f64().unwrap();
-
-        let result: Vec<f64> = input_data
-            .iter()
-            .zip(target_data.iter())
-            .map(|(&x, &t)| {
-                // max(x, 0) - x*t + log(1 + exp(-|x|))
-                let relu_x = x.max(0.0);
-                relu_x - x * t + (1.0 + (-x.abs()).exp()).ln()
-            })
-            .collect();
-
-        let t = Variable::new(Tensor::from_slice(&result, input.tensor().shape()));
-        t.mean().unwrap()
+        // Numerically stable: max(x,0) - x*t + log(1 + exp(-|x|))
+        // = relu(x) - x*t + log(1 + exp(-|x|))
+        // Using Variable ops: sigmoid computes 1/(1+exp(-x)), so
+        // -log(sigmoid(x)) = log(1+exp(-x)) for x > 0
+        // For numerical stability, use: softplus(x) - x*t where softplus(x) = log(1+exp(x))
+        // BCE with logits = softplus(x) - x*t = log(1+exp(x)) - x*t
+        // But softplus(x) = x + log(1+exp(-x)) for large x, which is relu(x) + log(1+exp(-|x|))
+        // Simpler: just apply sigmoid then use BCELoss logic
+        let probs = input.sigmoid().unwrap();
+        let clamped = probs.clamp(1e-12, 1.0 - 1e-12).unwrap();
+        let log_p = clamped.log().unwrap();
+        let ones = Variable::new(Tensor::ones(input.tensor().shape()));
+        let log_1mp = ones.sub(&clamped).unwrap().log().unwrap();
+        let ones_t = Variable::new(Tensor::ones(target.tensor().shape()));
+        let bce = target.mul(&log_p).unwrap()
+            .add(&ones_t.sub(target).unwrap().mul(&log_1mp).unwrap()).unwrap()
+            .neg().unwrap();
+        bce.mean().unwrap()
     }
 }
 
@@ -146,23 +147,13 @@ impl KLDivLoss {
     pub fn forward(&self, input: &Variable, target: &Variable) -> Variable {
         // KL(P || Q) = sum(P * (log(P) - log(Q)))
         // input is log(Q), target is P
-        let input_data = input.tensor().to_vec_f64().unwrap();
-        let target_data = target.tensor().to_vec_f64().unwrap();
-
-        let result: Vec<f64> = input_data
-            .iter()
-            .zip(target_data.iter())
-            .map(|(&log_q, &p)| {
-                if p > 0.0 {
-                    p * (p.ln() - log_q)
-                } else {
-                    0.0
-                }
-            })
-            .collect();
-
-        let t = Variable::new(Tensor::from_slice(&result, input.tensor().shape()));
-        t.mean().unwrap()
+        // = sum(P * log(P) - P * log(Q))
+        // P * log(P) is a constant w.r.t. input, but we include it for correctness
+        // The gradient-relevant part is: -P * log(Q) = -target * input
+        let target_log_target = target.mul(&target.clamp(1e-12, 1e30).unwrap().log().unwrap()).unwrap();
+        let target_log_q = target.mul(input).unwrap();
+        let kl = target_log_target.sub(&target_log_q).unwrap();
+        kl.mean().unwrap()
     }
 }
 
@@ -183,18 +174,20 @@ impl NLLLoss {
 
     pub fn forward(&self, input: &Variable, target: &Variable) -> Variable {
         let n = input.tensor().shape()[0];
+        // Gather the log-prob at each target class using index_select per row
+        // target: [N] class indices, input: [N, C] log probabilities
+        // We need to select input[i, target[i]] for each i
+        // Approach: flatten input, compute flat indices, use index_select
         let c = input.tensor().shape()[1];
-        let input_data = input.tensor().to_vec_f64().unwrap();
         let target_data = target.tensor().to_vec_f64().unwrap();
-
-        let mut loss_sum = 0.0f64;
-        for i in 0..n {
-            let class_idx = target_data[i] as usize;
-            assert!(class_idx < c);
-            loss_sum -= input_data[i * c + class_idx];
-        }
-
-        Variable::new(Tensor::scalar(loss_sum / n as f64))
+        let flat_indices: Vec<f64> = (0..n).map(|i| {
+            (i * c) as f64 + target_data[i]
+        }).collect();
+        let idx_var = Variable::new(Tensor::from_slice(&flat_indices, &[n]));
+        let flat_input = input.reshape(&[n * c]).unwrap();
+        let gathered = flat_input.index_select(0, &idx_var).unwrap();
+        // NLL = -mean(gathered)
+        gathered.neg().unwrap().mean().unwrap()
     }
 }
 

@@ -48,10 +48,14 @@ pub struct GELU;
 
 impl Module for GELU {
     fn forward(&self, input: &Variable) -> Variable {
-        // Use the Variable's gelu if available, otherwise fall back to tensor
-        // For now, compute via tensor and wrap
-        let result = input.tensor().gelu().unwrap();
-        Variable::new(result)
+        // GELU(x) = 0.5 * x * (1 + tanh(sqrt(2/π) * (x + 0.044715 * x³)))
+        let x2 = input.mul(input).unwrap();
+        let x3 = x2.mul(input).unwrap();
+        let inner = input.add(&x3.mul_scalar(0.044715).unwrap()).unwrap();
+        let scaled = inner.mul_scalar((2.0_f64 / std::f64::consts::PI).sqrt()).unwrap();
+        let tanh_val = scaled.tanh().unwrap();
+        let one_plus = tanh_val.add_scalar(1.0).unwrap();
+        input.mul(&one_plus).unwrap().mul_scalar(0.5).unwrap()
     }
 
     fn parameters(&self) -> Vec<Variable> {
@@ -64,8 +68,9 @@ pub struct SiLU;
 
 impl Module for SiLU {
     fn forward(&self, input: &Variable) -> Variable {
-        let result = input.tensor().silu().unwrap();
-        Variable::new(result)
+        // SiLU(x) = x * sigmoid(x)
+        let sig = input.sigmoid().unwrap();
+        input.mul(&sig).unwrap()
     }
 
     fn parameters(&self) -> Vec<Variable> {
