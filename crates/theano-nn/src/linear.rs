@@ -2,6 +2,7 @@
 
 use theano_autograd::Variable;
 use theano_core::Tensor;
+use theano_types::{Device, Result};
 
 use crate::init;
 use crate::module::Module;
@@ -71,6 +72,39 @@ impl Linear {
             in_features,
             out_features,
         }
+    }
+
+    /// Move this layer to a different device, returning a new Linear layer.
+    ///
+    /// Like `layer.to(device)` in PyTorch.
+    ///
+    /// # Examples
+    /// ```ignore
+    /// let layer = Linear::new(784, 256);
+    /// let layer_gpu = layer.to(&Device::Cuda(0))?;
+    /// ```
+    pub fn to(&self, device: &Device) -> Result<Self> {
+        let weight = self.weight.to(device)?;
+        let bias = match &self.bias {
+            Some(b) => Some(b.to(device)?),
+            None => None,
+        };
+        Ok(Self {
+            weight,
+            bias,
+            in_features: self.in_features,
+            out_features: self.out_features,
+        })
+    }
+
+    /// Move to CPU.
+    pub fn cpu(&self) -> Result<Self> {
+        self.to(&Device::Cpu)
+    }
+
+    /// Move to CUDA device 0.
+    pub fn cuda(&self) -> Result<Self> {
+        self.to(&Device::Cuda(0))
     }
 }
 
@@ -148,5 +182,48 @@ mod tests {
 
         // Weight should have a gradient
         assert!(layer.weight().grad().is_some());
+    }
+
+    #[test]
+    fn test_linear_to_device() {
+        use theano_types::Device;
+
+        let layer = Linear::new(10, 5);
+        let layer_gpu = layer.to(&Device::Cuda(0)).unwrap();
+
+        // Verify shapes preserved
+        assert_eq!(layer_gpu.in_features(), 10);
+        assert_eq!(layer_gpu.out_features(), 5);
+
+        // Verify weights transferred
+        assert_eq!(layer_gpu.weight().device(), &Device::Cuda(0));
+        assert!(layer_gpu.bias().is_some());
+        assert_eq!(layer_gpu.bias().unwrap().device(), &Device::Cuda(0));
+
+        // Verify data preserved
+        let orig_w = layer.weight().tensor().to_vec_f64().unwrap();
+        let gpu_w = layer_gpu.weight().tensor().to_vec_f64().unwrap();
+        assert_eq!(orig_w, gpu_w);
+    }
+
+    #[test]
+    fn test_linear_to_cpu() {
+        let layer = Linear::new(4, 3);
+        let layer_cpu = layer.cpu().unwrap();
+        assert_eq!(layer_cpu.weight().device(), &Device::Cpu);
+    }
+
+    #[test]
+    fn test_linear_roundtrip() {
+        use theano_types::Device;
+
+        let layer = Linear::new(8, 4);
+        let orig_data = layer.weight().tensor().to_vec_f64().unwrap();
+
+        let layer_gpu = layer.to(&Device::Cuda(0)).unwrap();
+        let layer_back = layer_gpu.to(&Device::Cpu).unwrap();
+
+        let back_data = layer_back.weight().tensor().to_vec_f64().unwrap();
+        assert_eq!(orig_data, back_data);
     }
 }

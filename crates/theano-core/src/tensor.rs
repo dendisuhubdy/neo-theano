@@ -261,6 +261,74 @@ impl Tensor {
         }
     }
 
+    // ---- Device transfer (like torch.Tensor.to / .cpu() / .cuda()) ----
+
+    /// Move this tensor to a different device.
+    ///
+    /// Like `torch.Tensor.to(device)`. Returns a new tensor on the target device.
+    /// If already on the target device, returns a cheap clone (shared storage).
+    ///
+    /// # Examples
+    /// ```ignore
+    /// let x = Tensor::ones(&[2, 3]);
+    /// let x_gpu = x.to(&Device::Cuda(0))?;
+    /// let x_cpu = x_gpu.to(&Device::Cpu)?;
+    /// ```
+    pub fn to(&self, device: &Device) -> Result<Tensor> {
+        if self.device() == device {
+            return Ok(self.clone());
+        }
+        let new_storage = self.inner.storage.to_device(
+            device,
+            &self.inner.shape,
+            &self.inner.strides,
+            self.inner.offset,
+        )?;
+        // After transfer, data is contiguous — reset strides and offset
+        let strides = Shape::new(self.inner.shape.clone()).contiguous_strides();
+        Ok(Tensor::from_parts_with_grad(
+            new_storage,
+            self.inner.shape.clone(),
+            strides,
+            0,
+            self.inner.dtype,
+            device.clone(),
+            self.inner.requires_grad,
+            None, // detach from graph on device transfer (like PyTorch)
+        ))
+    }
+
+    /// Move this tensor to CPU. Shorthand for `.to(&Device::Cpu)`.
+    ///
+    /// Like `torch.Tensor.cpu()`.
+    pub fn cpu(&self) -> Result<Tensor> {
+        self.to(&Device::Cpu)
+    }
+
+    /// Move this tensor to CUDA device 0. Shorthand for `.to(&Device::Cuda(0))`.
+    ///
+    /// Like `torch.Tensor.cuda()`.
+    pub fn cuda(&self) -> Result<Tensor> {
+        self.to(&Device::Cuda(0))
+    }
+
+    /// Move this tensor to a specific CUDA device.
+    ///
+    /// Like `torch.Tensor.cuda(device=n)`.
+    pub fn cuda_device(&self, ordinal: usize) -> Result<Tensor> {
+        self.to(&Device::Cuda(ordinal))
+    }
+
+    /// Whether this tensor is on CPU.
+    pub fn is_cpu(&self) -> bool {
+        self.inner.device.is_cpu()
+    }
+
+    /// Whether this tensor is on a CUDA device.
+    pub fn is_cuda(&self) -> bool {
+        self.inner.device.is_cuda()
+    }
+
     /// Convert to f64 Vec for debugging/testing (copies to CPU).
     pub fn to_vec_f64(&self) -> Result<Vec<f64>> {
         self.inner

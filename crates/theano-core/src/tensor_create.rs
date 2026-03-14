@@ -1,4 +1,4 @@
-use theano_types::{DType, Device, Shape, Result};
+use theano_types::{DType, Device, Shape, Result, TheanoError};
 
 use crate::storage::Storage;
 use crate::tensor::Tensor;
@@ -171,6 +171,22 @@ impl crate::storage::BackendStorageBoxed for CpuF64Storage {
     fn clone_box(&self) -> Box<dyn crate::storage::BackendStorageBoxed> {
         Box::new(self.clone())
     }
+
+    fn to_device(&self, device: &Device, shape: &[usize], strides: &[usize], offset: usize) -> Result<Box<dyn crate::storage::BackendStorageBoxed>> {
+        if device.is_cpu() {
+            // CPU → CPU: just clone
+            return Ok(self.clone_box());
+        }
+        // CPU → GPU: materialize contiguous data, then create device storage.
+        // The actual GPU storage creation would be handled by the GPU backend crate.
+        // For now, we materialize the f64 data and store it tagged with the target device.
+        // When a real GPU backend is active, it will intercept this and do cudaMemcpy etc.
+        let contiguous_data = self.to_f64_vec(shape, strides, offset)?;
+        Ok(Box::new(CpuF64Storage {
+            data: contiguous_data,
+            dtype: self.dtype,
+        }))
+    }
 }
 
 fn is_contiguous(shape: &[usize], strides: &[usize]) -> bool {
@@ -267,5 +283,57 @@ mod tests {
         assert!(t.is_scalar());
         assert_eq!(t.numel(), 1);
         assert_eq!(t.item().unwrap(), 3.14);
+    }
+
+    #[test]
+    fn test_to_same_device_is_clone() {
+        let t = Tensor::from_slice(&[1.0, 2.0, 3.0], &[3]);
+        let t2 = t.to(&Device::Cpu).unwrap();
+        assert_eq!(t.device(), t2.device());
+        assert_eq!(t.to_vec_f64().unwrap(), t2.to_vec_f64().unwrap());
+    }
+
+    #[test]
+    fn test_to_device_preserves_data() {
+        let t = Tensor::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+        // Transfer to a "CUDA" device (still backed by CPU storage for now)
+        let t_gpu = t.to(&Device::Cuda(0)).unwrap();
+        assert_eq!(t_gpu.shape(), &[2, 2]);
+        assert_eq!(t_gpu.numel(), 4);
+        // Data should be preserved
+        let data_orig = t.to_vec_f64().unwrap();
+        let data_gpu = t_gpu.to_vec_f64().unwrap();
+        assert_eq!(data_orig, data_gpu);
+    }
+
+    #[test]
+    fn test_to_roundtrip() {
+        let t = Tensor::from_slice(&[10.0, 20.0, 30.0], &[3]);
+        let t_gpu = t.to(&Device::Cuda(0)).unwrap();
+        let t_back = t_gpu.to(&Device::Cpu).unwrap();
+        assert_eq!(t_back.device(), &Device::Cpu);
+        assert_eq!(t.to_vec_f64().unwrap(), t_back.to_vec_f64().unwrap());
+    }
+
+    #[test]
+    fn test_cpu_shorthand() {
+        let t = Tensor::from_slice(&[1.0, 2.0], &[2]);
+        let t_cpu = t.cpu().unwrap();
+        assert!(t_cpu.is_cpu());
+    }
+
+    #[test]
+    fn test_is_cpu_is_cuda() {
+        let t = Tensor::ones(&[2, 2]);
+        assert!(t.is_cpu());
+        assert!(!t.is_cuda());
+    }
+
+    #[test]
+    fn test_to_preserves_requires_grad() {
+        let t = Tensor::ones(&[2, 3]).requires_grad_(true);
+        assert!(t.requires_grad());
+        let t2 = t.to(&Device::Cuda(0)).unwrap();
+        assert!(t2.requires_grad());
     }
 }
