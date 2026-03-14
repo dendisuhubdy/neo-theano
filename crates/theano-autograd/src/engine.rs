@@ -370,4 +370,281 @@ mod tests {
             "Expected 1.0, got {g}"
         );
     }
+
+    // ---- Tests for new Variable operations ----
+
+    #[test]
+    fn test_cat_forward() {
+        let a = Variable::requires_grad(Tensor::from_slice(&[1.0, 2.0, 3.0], &[1, 3]));
+        let b = Variable::requires_grad(Tensor::from_slice(&[4.0, 5.0, 6.0], &[1, 3]));
+        let c = Variable::cat(&[&a, &b], 0).unwrap();
+        assert_eq!(c.tensor().shape(), &[2, 3]);
+        assert_eq!(
+            c.tensor().to_vec_f64().unwrap(),
+            vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+        );
+    }
+
+    #[test]
+    fn test_cat_backward() {
+        let a = Variable::requires_grad(Tensor::from_slice(&[1.0, 2.0, 3.0], &[1, 3]));
+        let b = Variable::requires_grad(Tensor::from_slice(&[4.0, 5.0, 6.0], &[1, 3]));
+        let c = Variable::cat(&[&a, &b], 0).unwrap();
+        let loss = c.sum().unwrap();
+        loss.backward();
+
+        let ga = a.grad().unwrap().to_vec_f64().unwrap();
+        let gb = b.grad().unwrap().to_vec_f64().unwrap();
+        // d/da sum(cat(a, b)) = [1, 1, 1]
+        assert_eq!(ga, vec![1.0, 1.0, 1.0]);
+        assert_eq!(gb, vec![1.0, 1.0, 1.0]);
+    }
+
+    #[test]
+    fn test_cat_backward_dim1() {
+        let a = Variable::requires_grad(Tensor::from_slice(&[1.0, 2.0], &[2, 1]));
+        let b = Variable::requires_grad(Tensor::from_slice(&[3.0, 4.0, 5.0, 6.0], &[2, 2]));
+        let c = Variable::cat(&[&a, &b], 1).unwrap();
+        assert_eq!(c.tensor().shape(), &[2, 3]);
+        let loss = c.sum().unwrap();
+        loss.backward();
+
+        let ga = a.grad().unwrap().to_vec_f64().unwrap();
+        let gb = b.grad().unwrap().to_vec_f64().unwrap();
+        assert_eq!(ga, vec![1.0, 1.0]);
+        assert_eq!(gb, vec![1.0, 1.0, 1.0, 1.0]);
+    }
+
+    #[test]
+    fn test_stack_forward() {
+        let a = Variable::requires_grad(Tensor::from_slice(&[1.0, 2.0, 3.0], &[3]));
+        let b = Variable::requires_grad(Tensor::from_slice(&[4.0, 5.0, 6.0], &[3]));
+        let c = Variable::stack(&[&a, &b], 0).unwrap();
+        assert_eq!(c.tensor().shape(), &[2, 3]);
+        assert_eq!(
+            c.tensor().to_vec_f64().unwrap(),
+            vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+        );
+    }
+
+    #[test]
+    fn test_stack_backward() {
+        let a = Variable::requires_grad(Tensor::from_slice(&[1.0, 2.0, 3.0], &[3]));
+        let b = Variable::requires_grad(Tensor::from_slice(&[4.0, 5.0, 6.0], &[3]));
+        let c = Variable::stack(&[&a, &b], 0).unwrap();
+        let loss = c.sum().unwrap();
+        loss.backward();
+
+        let ga = a.grad().unwrap().to_vec_f64().unwrap();
+        let gb = b.grad().unwrap().to_vec_f64().unwrap();
+        assert_eq!(ga, vec![1.0, 1.0, 1.0]);
+        assert_eq!(gb, vec![1.0, 1.0, 1.0]);
+    }
+
+    #[test]
+    fn test_select_forward() {
+        let x = Variable::requires_grad(Tensor::from_slice(
+            &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+            &[2, 3],
+        ));
+        let s = x.select(0, 1).unwrap();
+        assert_eq!(s.tensor().shape(), &[3]);
+        assert_eq!(s.tensor().to_vec_f64().unwrap(), vec![4.0, 5.0, 6.0]);
+    }
+
+    #[test]
+    fn test_select_backward() {
+        let x = Variable::requires_grad(Tensor::from_slice(
+            &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+            &[2, 3],
+        ));
+        let s = x.select(0, 1).unwrap();
+        let loss = s.sum().unwrap();
+        loss.backward();
+
+        let g = x.grad().unwrap().to_vec_f64().unwrap();
+        // Gradient should be zero for row 0, ones for row 1
+        assert_eq!(g, vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0]);
+    }
+
+    #[test]
+    fn test_narrow_forward() {
+        let x = Variable::requires_grad(Tensor::from_slice(
+            &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+            &[2, 3],
+        ));
+        let n = x.narrow(1, 1, 2).unwrap();
+        assert_eq!(n.tensor().shape(), &[2, 2]);
+        assert_eq!(n.tensor().to_vec_f64().unwrap(), vec![2.0, 3.0, 5.0, 6.0]);
+    }
+
+    #[test]
+    fn test_narrow_backward() {
+        let x = Variable::requires_grad(Tensor::from_slice(
+            &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+            &[2, 3],
+        ));
+        let n = x.narrow(1, 1, 2).unwrap();
+        let loss = n.sum().unwrap();
+        loss.backward();
+
+        let g = x.grad().unwrap().to_vec_f64().unwrap();
+        // First column should be 0, second and third columns should be 1
+        assert_eq!(g, vec![0.0, 1.0, 1.0, 0.0, 1.0, 1.0]);
+    }
+
+    #[test]
+    fn test_view_forward() {
+        let x = Variable::requires_grad(Tensor::from_slice(
+            &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+            &[2, 3],
+        ));
+        let v = x.view(&[3, 2]).unwrap();
+        assert_eq!(v.tensor().shape(), &[3, 2]);
+        assert_eq!(
+            v.tensor().to_vec_f64().unwrap(),
+            vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+        );
+    }
+
+    #[test]
+    fn test_view_backward() {
+        let x = Variable::requires_grad(Tensor::from_slice(
+            &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+            &[2, 3],
+        ));
+        let v = x.view(&[6]).unwrap();
+        let loss = v.sum().unwrap();
+        loss.backward();
+
+        let g = x.grad().unwrap().to_vec_f64().unwrap();
+        assert_eq!(g, vec![1.0, 1.0, 1.0, 1.0, 1.0, 1.0]);
+        assert_eq!(x.grad().unwrap().shape(), &[2, 3]);
+    }
+
+    #[test]
+    fn test_view_with_infer() {
+        let x = Variable::requires_grad(Tensor::from_slice(
+            &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+            &[2, 3],
+        ));
+        let v = x.view(&[-1, 2]).unwrap();
+        assert_eq!(v.tensor().shape(), &[3, 2]);
+    }
+
+    #[test]
+    fn test_contiguous_backward() {
+        let x = Variable::requires_grad(Tensor::from_slice(&[1.0, 2.0, 3.0], &[3]));
+        let c = x.contiguous().unwrap();
+        let loss = c.sum().unwrap();
+        loss.backward();
+
+        let g = x.grad().unwrap().to_vec_f64().unwrap();
+        assert_eq!(g, vec![1.0, 1.0, 1.0]);
+    }
+
+    #[test]
+    fn test_index_select_forward() {
+        let x = Variable::requires_grad(Tensor::from_slice(
+            &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+            &[2, 3],
+        ));
+        let indices = Variable::new(Tensor::from_slice(&[0.0, 2.0], &[2]));
+        let s = x.index_select(1, &indices).unwrap();
+        assert_eq!(s.tensor().shape(), &[2, 2]);
+        assert_eq!(s.tensor().to_vec_f64().unwrap(), vec![1.0, 3.0, 4.0, 6.0]);
+    }
+
+    #[test]
+    fn test_index_select_backward() {
+        let x = Variable::requires_grad(Tensor::from_slice(
+            &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+            &[2, 3],
+        ));
+        let indices = Variable::new(Tensor::from_slice(&[0.0, 2.0], &[2]));
+        let s = x.index_select(1, &indices).unwrap();
+        let loss = s.sum().unwrap();
+        loss.backward();
+
+        let g = x.grad().unwrap().to_vec_f64().unwrap();
+        // Gradient: column 0 and 2 get 1.0, column 1 gets 0.0
+        assert_eq!(g, vec![1.0, 0.0, 1.0, 1.0, 0.0, 1.0]);
+    }
+
+    #[test]
+    fn test_index_select_backward_duplicate_indices() {
+        let x = Variable::requires_grad(Tensor::from_slice(&[1.0, 2.0, 3.0], &[3]));
+        let indices = Variable::new(Tensor::from_slice(&[0.0, 0.0, 2.0], &[3]));
+        let s = x.index_select(0, &indices).unwrap();
+        let loss = s.sum().unwrap();
+        loss.backward();
+
+        let g = x.grad().unwrap().to_vec_f64().unwrap();
+        // Index 0 selected twice: gradient accumulates to 2.0
+        assert_eq!(g, vec![2.0, 0.0, 1.0]);
+    }
+
+    #[test]
+    fn test_where_cond_forward() {
+        let x = Variable::requires_grad(Tensor::from_slice(&[1.0, 2.0, 3.0, 4.0], &[4]));
+        let cond = Variable::new(Tensor::from_slice(&[1.0, 0.0, 1.0, 0.0], &[4]));
+        let other = Variable::requires_grad(Tensor::from_slice(&[10.0, 20.0, 30.0, 40.0], &[4]));
+        let result = x.where_cond(&cond, &other).unwrap();
+        assert_eq!(
+            result.tensor().to_vec_f64().unwrap(),
+            vec![1.0, 20.0, 3.0, 40.0]
+        );
+    }
+
+    #[test]
+    fn test_where_cond_backward() {
+        let x = Variable::requires_grad(Tensor::from_slice(&[1.0, 2.0, 3.0, 4.0], &[4]));
+        let cond = Variable::new(Tensor::from_slice(&[1.0, 0.0, 1.0, 0.0], &[4]));
+        let other = Variable::requires_grad(Tensor::from_slice(&[10.0, 20.0, 30.0, 40.0], &[4]));
+        let result = x.where_cond(&cond, &other).unwrap();
+        let loss = result.sum().unwrap();
+        loss.backward();
+
+        let gx = x.grad().unwrap().to_vec_f64().unwrap();
+        let go = other.grad().unwrap().to_vec_f64().unwrap();
+        // x gets gradient where cond is true
+        assert_eq!(gx, vec![1.0, 0.0, 1.0, 0.0]);
+        // other gets gradient where cond is false
+        assert_eq!(go, vec![0.0, 1.0, 0.0, 1.0]);
+    }
+
+    #[test]
+    fn test_cat_with_mul_backward() {
+        // Test cat backward with a non-trivial upstream gradient
+        let a = Variable::requires_grad(Tensor::from_slice(&[1.0, 2.0], &[2]));
+        let b = Variable::requires_grad(Tensor::from_slice(&[3.0, 4.0], &[2]));
+        let c = Variable::cat(&[&a, &b], 0).unwrap();
+        // Multiply by a constant to get non-uniform gradients
+        let scale = Variable::new(Tensor::from_slice(&[1.0, 2.0, 3.0, 4.0], &[4]));
+        let scaled = c.mul(&scale).unwrap();
+        let loss = scaled.sum().unwrap();
+        loss.backward();
+
+        let ga = a.grad().unwrap().to_vec_f64().unwrap();
+        let gb = b.grad().unwrap().to_vec_f64().unwrap();
+        // gradient = scale values
+        assert_eq!(ga, vec![1.0, 2.0]);
+        assert_eq!(gb, vec![3.0, 4.0]);
+    }
+
+    #[test]
+    fn test_narrow_on_dim0() {
+        let x = Variable::requires_grad(Tensor::from_slice(
+            &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0],
+            &[3, 3],
+        ));
+        let n = x.narrow(0, 1, 2).unwrap();
+        assert_eq!(n.tensor().shape(), &[2, 3]);
+        let loss = n.sum().unwrap();
+        loss.backward();
+
+        let g = x.grad().unwrap().to_vec_f64().unwrap();
+        // Row 0 gets 0, rows 1-2 get 1
+        assert_eq!(g, vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]);
+    }
 }

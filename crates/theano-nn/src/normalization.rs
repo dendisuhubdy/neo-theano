@@ -2,6 +2,7 @@
 
 use theano_autograd::Variable;
 use theano_core::Tensor;
+use theano_types::{Device, Result};
 use crate::init;
 use crate::module::Module;
 
@@ -24,6 +25,26 @@ impl LayerNorm {
             weight,
             bias,
         }
+    }
+
+    /// Move this layer to a different device, returning a new LayerNorm.
+    pub fn to(&self, device: &Device) -> Result<Self> {
+        Ok(Self {
+            normalized_shape: self.normalized_shape.clone(),
+            eps: self.eps,
+            weight: self.weight.to(device)?,
+            bias: self.bias.to(device)?,
+        })
+    }
+
+    /// Move to CPU.
+    pub fn cpu(&self) -> Result<Self> {
+        self.to(&Device::Cpu)
+    }
+
+    /// Move to CUDA device 0.
+    pub fn cuda(&self) -> Result<Self> {
+        self.to(&Device::Cuda(0))
     }
 
     /// Reconstruct a LayerNorm from pre-trained weight and bias tensors.
@@ -76,6 +97,13 @@ impl Module for LayerNorm {
     fn parameters(&self) -> Vec<Variable> {
         vec![self.weight.clone(), self.bias.clone()]
     }
+
+    fn named_parameters(&self) -> Vec<(String, Variable)> {
+        vec![
+            ("weight".to_string(), self.weight.clone()),
+            ("bias".to_string(), self.bias.clone()),
+        ]
+    }
 }
 
 /// Group Normalization. Like `torch.nn.GroupNorm`.
@@ -98,6 +126,29 @@ impl GroupNorm {
             weight: Variable::requires_grad(Tensor::ones(&[num_channels])),
             bias: init::zeros(&[num_channels]),
         }
+    }
+}
+
+impl GroupNorm {
+    /// Move this layer to a different device, returning a new GroupNorm.
+    pub fn to(&self, device: &Device) -> Result<Self> {
+        Ok(Self {
+            num_groups: self.num_groups,
+            num_channels: self.num_channels,
+            eps: self.eps,
+            weight: self.weight.to(device)?,
+            bias: self.bias.to(device)?,
+        })
+    }
+
+    /// Move to CPU.
+    pub fn cpu(&self) -> Result<Self> {
+        self.to(&Device::Cpu)
+    }
+
+    /// Move to CUDA device 0.
+    pub fn cuda(&self) -> Result<Self> {
+        self.to(&Device::Cuda(0))
     }
 }
 
@@ -160,6 +211,13 @@ impl Module for GroupNorm {
     fn parameters(&self) -> Vec<Variable> {
         vec![self.weight.clone(), self.bias.clone()]
     }
+
+    fn named_parameters(&self) -> Vec<(String, Variable)> {
+        vec![
+            ("weight".to_string(), self.weight.clone()),
+            ("bias".to_string(), self.bias.clone()),
+        ]
+    }
 }
 
 #[cfg(test)]
@@ -186,5 +244,60 @@ mod tests {
         let input = Variable::new(Tensor::ones(&[2, 4, 3, 3]));
         let output = gn.forward(&input);
         assert_eq!(output.tensor().shape(), &[2, 4, 3, 3]);
+    }
+
+    #[test]
+    fn test_layernorm_to_device() {
+        let ln = LayerNorm::new(vec![8]);
+        let ln_gpu = ln.to(&Device::Cuda(0)).unwrap();
+        for param in ln_gpu.parameters() {
+            assert_eq!(param.device(), &Device::Cuda(0));
+        }
+
+        let ln_cpu = ln_gpu.cpu().unwrap();
+        for param in ln_cpu.parameters() {
+            assert_eq!(param.device(), &Device::Cpu);
+        }
+    }
+
+    #[test]
+    fn test_groupnorm_to_device() {
+        let gn = GroupNorm::new(2, 4);
+        let gn_gpu = gn.to(&Device::Cuda(0)).unwrap();
+        for param in gn_gpu.parameters() {
+            assert_eq!(param.device(), &Device::Cuda(0));
+        }
+
+        let gn_cpu = gn_gpu.cpu().unwrap();
+        for param in gn_cpu.parameters() {
+            assert_eq!(param.device(), &Device::Cpu);
+        }
+    }
+
+    #[test]
+    fn test_layernorm_named_parameters() {
+        let ln = LayerNorm::new(vec![8]);
+        let named = ln.named_parameters();
+        assert_eq!(named.len(), 2);
+        assert_eq!(named[0].0, "weight");
+        assert_eq!(named[1].0, "bias");
+    }
+
+    #[test]
+    fn test_groupnorm_named_parameters() {
+        let gn = GroupNorm::new(2, 4);
+        let named = gn.named_parameters();
+        assert_eq!(named.len(), 2);
+        assert_eq!(named[0].0, "weight");
+        assert_eq!(named[1].0, "bias");
+    }
+
+    #[test]
+    fn test_layernorm_state_dict() {
+        let ln = LayerNorm::new(vec![8]);
+        let sd = ln.state_dict();
+        assert!(sd.contains_key("weight"));
+        assert!(sd.contains_key("bias"));
+        assert_eq!(sd["weight"].shape(), &[8]);
     }
 }

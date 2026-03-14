@@ -100,8 +100,80 @@ impl Tensor {
         Self::from_f64_data(&[value], &[], DType::F32, &Device::Cpu)
     }
 
+    // ---- Random tensor constructors ----
+
+    /// Create a tensor filled with values from a standard normal distribution (mean=0, std=1).
+    /// Like `torch.randn`.
+    pub fn randn(shape: &[usize]) -> Self {
+        use rand::Rng;
+        use rand_distr::{Normal, Distribution};
+        let numel = shape.iter().product::<usize>().max(1);
+        let normal = Normal::new(0.0, 1.0).unwrap();
+        let mut rng = rand::thread_rng();
+        let data: Vec<f64> = (0..numel).map(|_| normal.sample(&mut rng)).collect();
+        Self::from_f64_data(&data, shape, DType::F32, &Device::Cpu)
+    }
+
+    /// Create a tensor filled with values from a uniform distribution on [0, 1).
+    /// Like `torch.rand`.
+    pub fn rand(shape: &[usize]) -> Self {
+        use rand::Rng;
+        let numel = shape.iter().product::<usize>().max(1);
+        let mut rng = rand::thread_rng();
+        let data: Vec<f64> = (0..numel).map(|_| rng.gen::<f64>()).collect();
+        Self::from_f64_data(&data, shape, DType::F32, &Device::Cpu)
+    }
+
+    /// Create a tensor filled with random integers from [low, high).
+    /// Like `torch.randint`.
+    pub fn randint(low: i64, high: i64, shape: &[usize]) -> Self {
+        use rand::Rng;
+        let numel = shape.iter().product::<usize>().max(1);
+        let mut rng = rand::thread_rng();
+        let data: Vec<f64> = (0..numel)
+            .map(|_| rng.gen_range(low..high) as f64)
+            .collect();
+        Self::from_f64_data(&data, shape, DType::I64, &Device::Cpu)
+    }
+
+    /// Create a tensor filled with values from a normal distribution with given mean and std.
+    /// Like `torch.normal`.
+    pub fn normal(mean: f64, std: f64, shape: &[usize]) -> Self {
+        use rand::Rng;
+        use rand_distr::{Normal, Distribution};
+        let numel = shape.iter().product::<usize>().max(1);
+        let normal = Normal::new(mean, std).unwrap();
+        let mut rng = rand::thread_rng();
+        let data: Vec<f64> = (0..numel).map(|_| normal.sample(&mut rng)).collect();
+        Self::from_f64_data(&data, shape, DType::F32, &Device::Cpu)
+    }
+
+    /// Create a tensor with the same shape, filled with uniform random values on [0, 1).
+    /// Like `torch.rand_like`.
+    pub fn rand_like(&self) -> Self {
+        Self::rand(self.shape())
+    }
+
+    /// Create a tensor with the same shape, filled with standard normal random values.
+    /// Like `torch.randn_like`.
+    pub fn randn_like(&self) -> Self {
+        Self::randn(self.shape())
+    }
+
+    /// Create a tensor with the same shape, filled with zeros.
+    /// Like `torch.zeros_like`.
+    pub fn zeros_like(&self) -> Self {
+        Self::zeros_with(self.shape(), self.dtype(), self.device())
+    }
+
+    /// Create a tensor with the same shape, filled with ones.
+    /// Like `torch.ones_like`.
+    pub fn ones_like(&self) -> Self {
+        Self::ones_with(self.shape(), self.dtype(), self.device())
+    }
+
     /// Internal: construct a tensor from f64 data via CPU storage.
-    fn from_f64_data(data: &[f64], shape: &[usize], dtype: DType, _device: &Device) -> Self {
+    pub(crate) fn from_f64_data(data: &[f64], shape: &[usize], dtype: DType, _device: &Device) -> Self {
         // For now, only CPU is supported in core. Backend-specific creation
         // will be handled by the respective backend crates.
         let strides = Shape::new(shape.to_vec()).contiguous_strides();
@@ -335,5 +407,85 @@ mod tests {
         assert!(t.requires_grad());
         let t2 = t.to(&Device::Cuda(0)).unwrap();
         assert!(t2.requires_grad());
+    }
+
+    #[test]
+    fn test_randn() {
+        let t = Tensor::randn(&[100]);
+        assert_eq!(t.shape(), &[100]);
+        assert_eq!(t.numel(), 100);
+        let data = t.to_vec_f64().unwrap();
+        // Check that values aren't all the same (very unlikely for normal dist)
+        let first = data[0];
+        assert!(data.iter().any(|&x| (x - first).abs() > 1e-10));
+        // Mean should be roughly 0 for 100 samples (very loose check)
+        let mean: f64 = data.iter().sum::<f64>() / data.len() as f64;
+        assert!(mean.abs() < 1.0, "mean of randn should be near 0, got {}", mean);
+    }
+
+    #[test]
+    fn test_rand() {
+        let t = Tensor::rand(&[100]);
+        assert_eq!(t.shape(), &[100]);
+        let data = t.to_vec_f64().unwrap();
+        // All values should be in [0, 1)
+        assert!(data.iter().all(|&x| x >= 0.0 && x < 1.0));
+    }
+
+    #[test]
+    fn test_randint() {
+        let t = Tensor::randint(0, 10, &[50]);
+        assert_eq!(t.shape(), &[50]);
+        let data = t.to_vec_f64().unwrap();
+        // All values should be integers in [0, 10)
+        for &v in &data {
+            assert!(v >= 0.0 && v < 10.0);
+            assert_eq!(v, v.floor());
+        }
+    }
+
+    #[test]
+    fn test_normal() {
+        let t = Tensor::normal(5.0, 0.1, &[200]);
+        assert_eq!(t.shape(), &[200]);
+        let data = t.to_vec_f64().unwrap();
+        let mean: f64 = data.iter().sum::<f64>() / data.len() as f64;
+        // Mean should be roughly 5.0
+        assert!((mean - 5.0).abs() < 0.5, "mean should be near 5.0, got {}", mean);
+    }
+
+    #[test]
+    fn test_rand_like() {
+        let t = Tensor::ones(&[3, 4]);
+        let r = t.rand_like();
+        assert_eq!(r.shape(), &[3, 4]);
+        let data = r.to_vec_f64().unwrap();
+        assert!(data.iter().all(|&x| x >= 0.0 && x < 1.0));
+    }
+
+    #[test]
+    fn test_randn_like() {
+        let t = Tensor::ones(&[3, 4]);
+        let r = t.randn_like();
+        assert_eq!(r.shape(), &[3, 4]);
+        assert_eq!(r.numel(), 12);
+    }
+
+    #[test]
+    fn test_zeros_like() {
+        let t = Tensor::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+        let z = t.zeros_like();
+        assert_eq!(z.shape(), &[2, 2]);
+        let data = z.to_vec_f64().unwrap();
+        assert!(data.iter().all(|&x| x == 0.0));
+    }
+
+    #[test]
+    fn test_ones_like() {
+        let t = Tensor::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+        let o = t.ones_like();
+        assert_eq!(o.shape(), &[2, 2]);
+        let data = o.to_vec_f64().unwrap();
+        assert!(data.iter().all(|&x| x == 1.0));
     }
 }

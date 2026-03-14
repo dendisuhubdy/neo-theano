@@ -1,6 +1,7 @@
 //! Container modules.
 
 use theano_autograd::Variable;
+use theano_types::{Device, Result};
 
 use crate::module::Module;
 
@@ -30,6 +31,21 @@ impl Sequential {
     pub fn is_empty(&self) -> bool {
         self.modules.is_empty()
     }
+
+    /// Transfer all parameters in the sequential to a different device.
+    ///
+    /// Since Sequential uses `Box<dyn Module>`, we cannot reconstruct a new
+    /// Sequential with moved layers. Instead, this transfers each parameter
+    /// Variable to the target device and returns the new parameter list.
+    ///
+    /// Like calling `model.to(device)` in PyTorch for the parameter transfer.
+    pub fn to_device_params(&self, device: &Device) -> Result<Vec<Variable>> {
+        self.modules
+            .iter()
+            .flat_map(|m| m.parameters())
+            .map(|p| p.to(device))
+            .collect()
+    }
 }
 
 impl Module for Sequential {
@@ -45,6 +61,18 @@ impl Module for Sequential {
         self.modules
             .iter()
             .flat_map(|m| m.parameters())
+            .collect()
+    }
+
+    fn named_parameters(&self) -> Vec<(String, Variable)> {
+        self.modules
+            .iter()
+            .enumerate()
+            .flat_map(|(i, m)| {
+                m.named_parameters()
+                    .into_iter()
+                    .map(move |(name, var)| (format!("{i}.{name}"), var))
+            })
             .collect()
     }
 }
@@ -97,5 +125,53 @@ mod tests {
         for param in model.parameters() {
             assert!(param.grad().is_some(), "parameter should have gradient");
         }
+    }
+
+    #[test]
+    fn test_sequential_to_device_params() {
+        use theano_types::Device;
+
+        let model = Sequential::new(vec![])
+            .add(Linear::new(10, 5))
+            .add(ReLU)
+            .add(Linear::new(5, 2));
+
+        let gpu_params = model.to_device_params(&Device::Cuda(0)).unwrap();
+        assert_eq!(gpu_params.len(), 4); // 2 weights + 2 biases
+        for param in &gpu_params {
+            assert_eq!(param.device(), &Device::Cuda(0));
+        }
+    }
+
+    #[test]
+    fn test_sequential_named_parameters() {
+        let model = Sequential::new(vec![])
+            .add(Linear::new(10, 5))
+            .add(ReLU)
+            .add(Linear::new(5, 2));
+
+        let named = model.named_parameters();
+        assert_eq!(named.len(), 4);
+        // First Linear's weight and bias get prefix "0."
+        assert_eq!(named[0].0, "0.weight");
+        assert_eq!(named[1].0, "0.bias");
+        // ReLU has no params, so next Linear gets prefix "2."
+        assert_eq!(named[2].0, "2.weight");
+        assert_eq!(named[3].0, "2.bias");
+    }
+
+    #[test]
+    fn test_sequential_state_dict() {
+        let model = Sequential::new(vec![])
+            .add(Linear::new(4, 3))
+            .add(ReLU)
+            .add(Linear::new(3, 1));
+
+        let sd = model.state_dict();
+        assert_eq!(sd.len(), 4);
+        assert!(sd.contains_key("0.weight"));
+        assert!(sd.contains_key("0.bias"));
+        assert!(sd.contains_key("2.weight"));
+        assert!(sd.contains_key("2.bias"));
     }
 }

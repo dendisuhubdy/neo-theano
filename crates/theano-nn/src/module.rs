@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use theano_autograd::Variable;
 use theano_core::Tensor;
 use theano_types::{Device, Result};
@@ -38,6 +40,16 @@ pub trait Module: Send + Sync {
         self.parameters()
             .iter()
             .map(|p| p.to(device))
+            .collect()
+    }
+
+    /// Return the state dict: a map from parameter names to their tensors.
+    ///
+    /// Like `model.state_dict()` in PyTorch. Useful for saving/loading models.
+    fn state_dict(&self) -> HashMap<String, Tensor> {
+        self.named_parameters()
+            .into_iter()
+            .map(|(name, var)| (name, var.into_tensor()))
             .collect()
     }
 }

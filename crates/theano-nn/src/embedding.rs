@@ -2,6 +2,7 @@
 
 use theano_autograd::Variable;
 use theano_core::Tensor;
+use theano_types::{Device, Result};
 use crate::init;
 use crate::module::Module;
 
@@ -25,6 +26,25 @@ impl Embedding {
 
     pub fn num_embeddings(&self) -> usize { self.num_embeddings }
     pub fn embedding_dim(&self) -> usize { self.embedding_dim }
+
+    /// Move this layer to a different device, returning a new Embedding.
+    pub fn to(&self, device: &Device) -> Result<Self> {
+        Ok(Self {
+            num_embeddings: self.num_embeddings,
+            embedding_dim: self.embedding_dim,
+            weight: self.weight.to(device)?,
+        })
+    }
+
+    /// Move to CPU.
+    pub fn cpu(&self) -> Result<Self> {
+        self.to(&Device::Cpu)
+    }
+
+    /// Move to CUDA device 0.
+    pub fn cuda(&self) -> Result<Self> {
+        self.to(&Device::Cuda(0))
+    }
 
     /// Reconstruct an Embedding layer from a pre-trained weight tensor.
     pub fn from_tensors(weight: Tensor) -> Self {
@@ -67,6 +87,10 @@ impl Module for Embedding {
     fn parameters(&self) -> Vec<Variable> {
         vec![self.weight.clone()]
     }
+
+    fn named_parameters(&self) -> Vec<(String, Variable)> {
+        vec![("weight".to_string(), self.weight.clone())]
+    }
 }
 
 #[cfg(test)]
@@ -94,5 +118,35 @@ mod tests {
         let emb = Embedding::new(100, 32);
         assert_eq!(emb.parameters().len(), 1);
         assert_eq!(emb.parameters()[0].tensor().shape(), &[100, 32]);
+    }
+
+    #[test]
+    fn test_embedding_to_device() {
+        let emb = Embedding::new(50, 16);
+        let emb_gpu = emb.to(&Device::Cuda(0)).unwrap();
+        assert_eq!(emb_gpu.parameters()[0].device(), &Device::Cuda(0));
+
+        // Verify metadata preserved
+        assert_eq!(emb_gpu.num_embeddings(), 50);
+        assert_eq!(emb_gpu.embedding_dim(), 16);
+
+        let emb_cpu = emb_gpu.cpu().unwrap();
+        assert_eq!(emb_cpu.parameters()[0].device(), &Device::Cpu);
+    }
+
+    #[test]
+    fn test_embedding_named_parameters() {
+        let emb = Embedding::new(50, 16);
+        let named = emb.named_parameters();
+        assert_eq!(named.len(), 1);
+        assert_eq!(named[0].0, "weight");
+    }
+
+    #[test]
+    fn test_embedding_state_dict() {
+        let emb = Embedding::new(50, 16);
+        let sd = emb.state_dict();
+        assert!(sd.contains_key("weight"));
+        assert_eq!(sd["weight"].shape(), &[50, 16]);
     }
 }

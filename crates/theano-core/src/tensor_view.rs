@@ -51,7 +51,7 @@ impl Tensor {
         }
     }
 
-    /// Alias for reshape. Like `torch.Tensor.view`.
+    /// Alias for reshape. Like `torch.Tensor.view` with usize dimensions.
     pub fn view(&self, shape: &[usize]) -> Result<Tensor> {
         if !self.is_contiguous() {
             return Err(TheanoError::runtime(
@@ -61,6 +61,68 @@ impl Tensor {
             ));
         }
         self.reshape(shape)
+    }
+
+    /// Reshape with shared storage, supporting `-1` for one inferred dimension.
+    /// Like `torch.Tensor.view(-1)` or `torch.Tensor.view(2, -1, 3)`.
+    ///
+    /// Requires the tensor to be contiguous. At most one dimension can be -1,
+    /// which will be inferred from the total number of elements.
+    pub fn view_i64(&self, shape: &[i64]) -> Result<Tensor> {
+        if !self.is_contiguous() {
+            return Err(TheanoError::runtime(
+                "view size is not compatible with input tensor's size and stride \
+                 (at least one dimension spans across two contiguous subspaces). \
+                 Use .reshape(...) instead.",
+            ));
+        }
+
+        let numel = self.numel();
+        let mut inferred_idx: Option<usize> = None;
+        let mut known_product: usize = 1;
+
+        for (i, &d) in shape.iter().enumerate() {
+            if d == -1 {
+                if inferred_idx.is_some() {
+                    return Err(TheanoError::InvalidShape {
+                        msg: "only one dimension can be inferred (-1)".to_string(),
+                    });
+                }
+                inferred_idx = Some(i);
+            } else if d < -1 {
+                return Err(TheanoError::InvalidShape {
+                    msg: format!("invalid shape dimension: {d}"),
+                });
+            } else {
+                known_product *= d as usize;
+            }
+        }
+
+        let resolved: Vec<usize> = if let Some(idx) = inferred_idx {
+            if known_product == 0 {
+                return Err(TheanoError::InvalidShape {
+                    msg: "cannot infer dimension with zero-size known dimensions".to_string(),
+                });
+            }
+            if numel % known_product != 0 {
+                return Err(TheanoError::InvalidShape {
+                    msg: format!(
+                        "shape {:?} is invalid for input of size {}",
+                        shape, numel
+                    ),
+                });
+            }
+            let inferred = numel / known_product;
+            shape
+                .iter()
+                .enumerate()
+                .map(|(i, &d)| if i == idx { inferred } else { d as usize })
+                .collect()
+        } else {
+            shape.iter().map(|&d| d as usize).collect()
+        };
+
+        self.reshape(&resolved)
     }
 
     /// Transpose two dimensions. Like `torch.Tensor.transpose`.
@@ -507,5 +569,55 @@ mod tests {
         assert!(c.is_contiguous());
         assert_eq!(c.shape(), &[3, 2]);
         assert_eq!(c.to_vec_f64().unwrap(), vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0]);
+    }
+
+    #[test]
+    fn test_view_i64_infer_dim() {
+        let t = Tensor::from_slice(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3]);
+        // view(3, -1) -> [3, 2]
+        let v = t.view_i64(&[3, -1]).unwrap();
+        assert_eq!(v.shape(), &[3, 2]);
+        assert_eq!(v.to_vec_f64().unwrap(), vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    }
+
+    #[test]
+    fn test_view_i64_flatten() {
+        let t = Tensor::from_slice(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3]);
+        // view(-1) -> [6]
+        let v = t.view_i64(&[-1]).unwrap();
+        assert_eq!(v.shape(), &[6]);
+        assert_eq!(v.to_vec_f64().unwrap(), vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    }
+
+    #[test]
+    fn test_view_i64_no_infer() {
+        let t = Tensor::from_slice(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[6]);
+        let v = t.view_i64(&[2, 3]).unwrap();
+        assert_eq!(v.shape(), &[2, 3]);
+    }
+
+    #[test]
+    fn test_view_i64_multiple_inferred_fails() {
+        let t = Tensor::from_slice(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[6]);
+        let r = t.view_i64(&[-1, -1]);
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn test_view_i64_non_contiguous_fails() {
+        let t = Tensor::from_slice(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3]);
+        let tr = t.transpose(0, 1).unwrap();
+        let r = tr.view_i64(&[-1]);
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn test_view_i64_3d() {
+        let t = Tensor::from_slice(
+            &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0],
+            &[12],
+        );
+        let v = t.view_i64(&[2, -1, 3]).unwrap();
+        assert_eq!(v.shape(), &[2, 2, 3]);
     }
 }

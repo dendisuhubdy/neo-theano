@@ -218,6 +218,32 @@ impl Tensor {
         self.binary_op(other, |a, b| a.max(b))
     }
 
+    /// Element-wise conditional selection. Like `torch.where`.
+    ///
+    /// Returns elements from `self` where `condition` is true (non-zero),
+    /// and from `other` where `condition` is false (zero).
+    pub fn where_cond(&self, condition: &Tensor, other: &Tensor) -> Result<Tensor> {
+        let cond_data = condition.to_vec_f64()?;
+        let self_data = self.to_vec_f64()?;
+        let other_data = other.to_vec_f64()?;
+        if cond_data.len() != self_data.len() || cond_data.len() != other_data.len() {
+            return Err(TheanoError::runtime(
+                "where_cond: all tensors must have the same number of elements",
+            ));
+        }
+        let result: Vec<f64> = cond_data
+            .iter()
+            .zip(self_data.iter().zip(other_data.iter()))
+            .map(|(&c, (&s, &o))| if c != 0.0 { s } else { o })
+            .collect();
+        Ok(Self::from_f64_result(&result, self.shape(), self.dtype()))
+    }
+
+    /// Greater-than comparison with a scalar. Like `tensor > scalar`.
+    pub fn gt_scalar(&self, scalar: f64) -> Result<Tensor> {
+        self.unary_op(|x| if x > scalar { 1.0 } else { 0.0 })
+    }
+
     // ---- Reduction operations ----
 
     /// Sum of all elements. Like `torch.sum`.
@@ -655,7 +681,7 @@ impl Tensor {
     }
 
     /// Internal helper to create a tensor from computed f64 results.
-    fn from_f64_result(data: &[f64], shape: &[usize], dtype: theano_types::DType) -> Tensor {
+    pub(crate) fn from_f64_result(data: &[f64], shape: &[usize], dtype: theano_types::DType) -> Tensor {
         let strides = Shape::new(shape.to_vec()).contiguous_strides();
         let storage = CpuF64Storage {
             data: data.to_vec(),
