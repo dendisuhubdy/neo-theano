@@ -87,8 +87,8 @@ impl MultiheadAttention {
     /// Forward with optional attention mask.
     ///
     /// query, key, value: [batch, seq_len, embed_dim]
-    /// mask: optional additive mask [batch, seq_len, seq_len] or broadcastable.
-    ///       Added to attention scores before softmax (like PyTorch).
+    /// mask: optional additive mask [batch, 1, seq_len, seq_len] or [batch, seq_len, seq_len]
+    ///       (broadcastable over heads). Added to attention scores before softmax (like PyTorch).
     ///       Use `-inf` values to mask out positions.
     ///
     /// Returns: [batch, seq_len, embed_dim]
@@ -97,19 +97,45 @@ impl MultiheadAttention {
         let k = apply_linear_3d(&self.k_proj, key);
         let v = apply_linear_3d(&self.v_proj, value);
 
-        // score = Q @ K^T / sqrt(d_k)
+        let batch = query.tensor().shape()[0];
+        let seq_len = query.tensor().shape()[1];
+
+        // Split heads: [batch, seq, embed_dim] → [batch, seq, num_heads, head_dim]
+        //            → transpose → [batch, num_heads, seq, head_dim]
+        let q = q.reshape(&[batch, seq_len, self.num_heads, self.head_dim]).unwrap()
+                 .transpose(1, 2).unwrap();
+        let k = k.reshape(&[batch, seq_len, self.num_heads, self.head_dim]).unwrap()
+                 .transpose(1, 2).unwrap();
+        let v = v.reshape(&[batch, seq_len, self.num_heads, self.head_dim]).unwrap()
+                 .transpose(1, 2).unwrap();
+
+        // score = Q @ K^T / sqrt(head_dim)  → [batch, num_heads, seq, seq]
         let k_t = k.transpose(-2, -1).unwrap();
-        let scale = (self.embed_dim as f64).sqrt();
+        let scale = (self.head_dim as f64).sqrt();
         let scores = q.matmul(&k_t).unwrap().mul_scalar(1.0 / scale).unwrap();
 
         // Apply additive mask before softmax
         let masked_scores = match mask {
-            Some(m) => scores.add(m).unwrap(),
+            Some(m) => {
+                // If mask is [batch, seq, seq], unsqueeze to [batch, 1, seq, seq] for broadcasting
+                let m = if m.tensor().ndim() == 3 {
+                    m.reshape(&[batch, 1, seq_len, seq_len]).unwrap()
+                } else {
+                    m.clone()
+                };
+                scores.add(&m).unwrap()
+            }
             None => scores,
         };
 
         let attn_weights = masked_scores.softmax(-1).unwrap();
+        // attn @ V → [batch, num_heads, seq, head_dim]
         let attn_output = attn_weights.matmul(&v).unwrap();
+
+        // Concatenate heads: transpose → [batch, seq, num_heads, head_dim] → reshape → [batch, seq, embed_dim]
+        let attn_output = attn_output.transpose(1, 2).unwrap()
+                                     .contiguous().unwrap()
+                                     .reshape(&[batch, seq_len, self.embed_dim]).unwrap();
 
         apply_linear_3d(&self.out_proj, &attn_output)
     }

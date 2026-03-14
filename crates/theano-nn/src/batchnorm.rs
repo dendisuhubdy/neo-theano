@@ -1,5 +1,7 @@
 //! Batch normalization layers.
 
+use parking_lot::Mutex;
+
 use theano_autograd::Variable;
 use theano_core::Tensor;
 use theano_types::{Device, Result};
@@ -10,6 +12,9 @@ use crate::module::Module;
 /// 1D Batch Normalization. Like `torch.nn.BatchNorm1d`.
 ///
 /// Normalizes over the batch dimension for inputs of shape [N, C] or [N, C, L].
+/// Running statistics (mean and variance) are updated during training via
+/// interior mutability (Mutex), matching PyTorch's behavior where `forward()`
+/// takes `&self` but still tracks running stats.
 pub struct BatchNorm1d {
     num_features: usize,
     eps: f64,
@@ -17,8 +22,8 @@ pub struct BatchNorm1d {
     affine: bool,
     weight: Option<Variable>, // gamma
     bias: Option<Variable>,   // beta
-    running_mean: Vec<f64>,
-    running_var: Vec<f64>,
+    running_mean: Mutex<Vec<f64>>,
+    running_var: Mutex<Vec<f64>>,
     training: bool,
 }
 
@@ -31,8 +36,8 @@ impl BatchNorm1d {
             affine: true,
             weight: Some(Variable::requires_grad(Tensor::ones(&[num_features]))),
             bias: Some(init::zeros(&[num_features])),
-            running_mean: vec![0.0; num_features],
-            running_var: vec![1.0; num_features],
+            running_mean: Mutex::new(vec![0.0; num_features]),
+            running_var: Mutex::new(vec![1.0; num_features]),
             training: true,
         }
     }
@@ -59,8 +64,8 @@ impl BatchNorm1d {
             affine: self.affine,
             weight,
             bias,
-            running_mean: self.running_mean.clone(),
-            running_var: self.running_var.clone(),
+            running_mean: Mutex::new(self.running_mean.lock().clone()),
+            running_var: Mutex::new(self.running_var.lock().clone()),
             training: self.training,
         })
     }
@@ -103,7 +108,6 @@ impl Module for BatchNorm1d {
             shape.len()
         );
 
-        let n = shape[0];
         let c = shape[1];
         assert_eq!(c, self.num_features, "expected {} features, got {}", self.num_features, c);
 
@@ -112,6 +116,18 @@ impl Module for BatchNorm1d {
             let mean = input.mean_dim(0, false).unwrap();
             let diff = input.sub(&mean.reshape(&[1, c]).unwrap()).unwrap();
             let var = diff.mul(&diff).unwrap().mean_dim(0, false).unwrap();
+
+            // Update running statistics (exponential moving average)
+            let batch_mean = mean.tensor().to_vec_f64().unwrap();
+            let batch_var = var.tensor().to_vec_f64().unwrap();
+            {
+                let mut rm = self.running_mean.lock();
+                let mut rv = self.running_var.lock();
+                for i in 0..c {
+                    rm[i] = (1.0 - self.momentum) * rm[i] + self.momentum * batch_mean[i];
+                    rv[i] = (1.0 - self.momentum) * rv[i] + self.momentum * batch_var[i];
+                }
+            }
 
             // Normalize: (x - mean) / sqrt(var + eps)
             let eps_tensor = Variable::new(Tensor::full(&[c], self.eps));
@@ -129,8 +145,10 @@ impl Module for BatchNorm1d {
             }
         } else {
             // Use running stats
-            let mean = Variable::new(Tensor::from_slice(&self.running_mean, &[c]));
-            let var = Variable::new(Tensor::from_slice(&self.running_var, &[c]));
+            let rm = self.running_mean.lock();
+            let rv = self.running_var.lock();
+            let mean = Variable::new(Tensor::from_slice(&rm, &[c]));
+            let var = Variable::new(Tensor::from_slice(&rv, &[c]));
             let eps_tensor = Variable::new(Tensor::full(&[c], self.eps));
 
             let diff = input.sub(&mean.reshape(&[1, c]).unwrap()).unwrap();

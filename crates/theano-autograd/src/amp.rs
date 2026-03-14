@@ -51,8 +51,9 @@ impl Drop for AutocastGuard {
 ///
 /// Like `with torch.cuda.amp.autocast():` in PyTorch.
 ///
-/// When autocast is enabled, eligible operations automatically run in
-/// lower-precision (e.g., float16) for better performance on GPU.
+/// **WARNING: This is currently a no-op stub.** No tensor operations inspect
+/// the autocast flag yet. The API exists so user code can be written against it,
+/// but dtype conversion will not occur until GPU float16 support is implemented.
 ///
 /// # Example
 /// ```ignore
@@ -73,7 +74,9 @@ where
 /// Like `torch.cuda.amp.GradScaler` in PyTorch. Scales the loss to prevent
 /// underflow in float16 gradients, then unscales before optimizer step.
 ///
-/// This is a stub — scaling logic is a no-op until GPU float16 support is active.
+/// **WARNING: This is currently a stub.** `scale()` operates on `f64` scalars,
+/// not `Tensor`/`Variable` objects. The full implementation requires GPU float16
+/// support. The API exists for forward-compatibility only.
 pub struct GradScaler {
     scale_factor: f64,
     _growth_factor: f64,
