@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use theano_core::Tensor;
 use theano_core::tensor::GradFn;
-use theano_types::Result;
+use theano_types::{Device, Result};
 
 use crate::grad_fns::*;
 use crate::no_grad::is_grad_enabled;
@@ -75,6 +75,42 @@ impl Variable {
     pub fn update_param(&mut self, new_tensor: Tensor) {
         self.tensor = new_tensor.requires_grad_(true);
         self.inputs = vec![];
+    }
+
+    // ---- Device transfer (like torch.Tensor.to / .cpu() / .cuda()) ----
+
+    /// Move this variable to a different device.
+    ///
+    /// Like `tensor.to(device)` in PyTorch. Returns a new leaf variable on the
+    /// target device, detached from the computation graph.
+    ///
+    /// # Examples
+    /// ```ignore
+    /// let x = Variable::requires_grad(Tensor::ones(&[2, 3]));
+    /// let x_gpu = x.to(&Device::Cuda(0))?;
+    /// ```
+    pub fn to(&self, device: &Device) -> Result<Variable> {
+        let new_tensor = self.tensor.to(device)?;
+        if self.requires_grad_flag() {
+            Ok(Variable::requires_grad(new_tensor))
+        } else {
+            Ok(Variable::new(new_tensor))
+        }
+    }
+
+    /// Move to CPU. Shorthand for `.to(&Device::Cpu)`.
+    pub fn cpu(&self) -> Result<Variable> {
+        self.to(&Device::Cpu)
+    }
+
+    /// Move to CUDA device 0. Shorthand for `.to(&Device::Cuda(0))`.
+    pub fn cuda(&self) -> Result<Variable> {
+        self.to(&Device::Cuda(0))
+    }
+
+    /// The device this variable's tensor lives on.
+    pub fn device(&self) -> &Device {
+        self.tensor.device()
     }
 
     /// Create a new variable as the output of an operation.
@@ -399,5 +435,45 @@ impl std::ops::Neg for &Variable {
     type Output = Variable;
     fn neg(self) -> Variable {
         Variable::neg(self).expect("Variable neg failed")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_variable_to_device() {
+        let x = Variable::requires_grad(Tensor::from_slice(&[1.0, 2.0, 3.0], &[3]));
+        let x_gpu = x.to(&Device::Cuda(0)).unwrap();
+        assert_eq!(x_gpu.device(), &Device::Cuda(0));
+        assert!(x_gpu.requires_grad_flag());
+    }
+
+    #[test]
+    fn test_variable_to_same_device() {
+        let x = Variable::new(Tensor::ones(&[2, 3]));
+        let x2 = x.to(&Device::Cpu).unwrap();
+        assert_eq!(x2.device(), &Device::Cpu);
+    }
+
+    #[test]
+    fn test_variable_cpu_shorthand() {
+        let x = Variable::new(Tensor::ones(&[2]));
+        let x_cpu = x.cpu().unwrap();
+        assert_eq!(x_cpu.device(), &Device::Cpu);
+    }
+
+    #[test]
+    fn test_variable_roundtrip() {
+        let x = Variable::requires_grad(Tensor::from_slice(&[5.0, 10.0], &[2]));
+        let x_gpu = x.to(&Device::Cuda(0)).unwrap();
+        let x_back = x_gpu.to(&Device::Cpu).unwrap();
+        assert_eq!(x_back.device(), &Device::Cpu);
+        assert!(x_back.requires_grad_flag());
+        assert_eq!(
+            x.tensor().to_vec_f64().unwrap(),
+            x_back.tensor().to_vec_f64().unwrap()
+        );
     }
 }
