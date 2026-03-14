@@ -1,11 +1,6 @@
 use std::collections::HashMap;
-use std::sync::Arc;
-
-use parking_lot::RwLock;
 
 use theano_core::Tensor;
-use theano_core::tensor::GradFn;
-use theano_types::Result;
 
 use crate::variable::Variable;
 
@@ -74,6 +69,9 @@ pub fn backward_from_variable(root: &Variable) {
 }
 
 /// Public backward function that takes a tensor (for compatibility).
+///
+/// **Note**: The tensor-path backward is not implemented. Use `Variable::backward()`
+/// instead, which is the primary autograd API.
 pub fn backward(loss: &Tensor) {
     if loss.numel() != 1 {
         panic!(
@@ -82,16 +80,10 @@ pub fn backward(loss: &Tensor) {
         );
     }
 
-    // Build the graph from tensor grad_fn links
-    let root_grad = Tensor::scalar(1.0);
-
-    // Collect all nodes via DFS on grad_fn chain
-    let mut topo: Vec<(Arc<dyn GradFn>, Vec<Tensor>)> = Vec::new();
-    let mut visited: std::collections::HashSet<usize> = std::collections::HashSet::new();
-
-    if let Some(gf) = loss.grad_fn() {
-        topo_sort_tensor(&gf, &gf.backward(&[root_grad.clone()]), &mut topo, &mut visited);
-    }
+    panic!(
+        "Tensor::backward() is not implemented. Use Variable::backward() instead. \
+         Wrap your tensors in Variable::requires_grad() to use the autograd engine."
+    );
 }
 
 /// DFS topological sort on Variables.
@@ -131,15 +123,6 @@ fn set_tensor_grad(tensor: &Tensor, grad: Tensor) {
     tensor.set_grad(grad);
 }
 
-// DFS for tensor-based backward (simplified)
-fn topo_sort_tensor(
-    _gf: &Arc<dyn GradFn>,
-    _grads: &[Option<Tensor>],
-    _topo: &mut Vec<(Arc<dyn GradFn>, Vec<Tensor>)>,
-    _visited: &mut std::collections::HashSet<usize>,
-) {
-    // This is a simplified version — the Variable-based backward is the primary API
-}
 
 #[cfg(test)]
 mod tests {

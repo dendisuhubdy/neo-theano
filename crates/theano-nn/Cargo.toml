@@ -12,3 +12,4 @@ theano-autograd = { workspace = true }
 thiserror = { workspace = true }
 rand = { workspace = true }
 rand_distr = { workspace = true }
+parking_lot = { workspace = true }

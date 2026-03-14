@@ -11,7 +11,7 @@ impl Tensor {
 
     /// Create a tensor filled with zeros on a specific device/dtype.
     pub fn zeros_with(shape: &[usize], dtype: DType, device: &Device) -> Self {
-        let numel = shape.iter().product::<usize>().max(1);
+        let numel = if shape.is_empty() { 1 } else { shape.iter().product::<usize>() };
         // We'll use the cpu storage directly for now
         let data = vec![0.0f64; numel];
         Self::from_f64_data(&data, shape, dtype, device)
@@ -24,7 +24,7 @@ impl Tensor {
 
     /// Create a tensor filled with ones on a specific device/dtype.
     pub fn ones_with(shape: &[usize], dtype: DType, device: &Device) -> Self {
-        let numel = shape.iter().product::<usize>().max(1);
+        let numel = if shape.is_empty() { 1 } else { shape.iter().product::<usize>() };
         let data = vec![1.0f64; numel];
         Self::from_f64_data(&data, shape, dtype, device)
     }
@@ -36,7 +36,7 @@ impl Tensor {
 
     /// Create a tensor filled with a given value on a specific device/dtype.
     pub fn full_with(shape: &[usize], value: f64, dtype: DType, device: &Device) -> Self {
-        let numel = shape.iter().product::<usize>().max(1);
+        let numel = if shape.is_empty() { 1 } else { shape.iter().product::<usize>() };
         let data = vec![value; numel];
         Self::from_f64_data(&data, shape, dtype, device)
     }
@@ -107,7 +107,7 @@ impl Tensor {
     pub fn randn(shape: &[usize]) -> Self {
         use rand::Rng;
         use rand_distr::{Normal, Distribution};
-        let numel = shape.iter().product::<usize>().max(1);
+        let numel = if shape.is_empty() { 1 } else { shape.iter().product::<usize>() };
         let normal = Normal::new(0.0, 1.0).unwrap();
         let mut rng = rand::thread_rng();
         let data: Vec<f64> = (0..numel).map(|_| normal.sample(&mut rng)).collect();
@@ -118,7 +118,7 @@ impl Tensor {
     /// Like `torch.rand`.
     pub fn rand(shape: &[usize]) -> Self {
         use rand::Rng;
-        let numel = shape.iter().product::<usize>().max(1);
+        let numel = if shape.is_empty() { 1 } else { shape.iter().product::<usize>() };
         let mut rng = rand::thread_rng();
         let data: Vec<f64> = (0..numel).map(|_| rng.gen::<f64>()).collect();
         Self::from_f64_data(&data, shape, DType::F32, &Device::Cpu)
@@ -128,7 +128,7 @@ impl Tensor {
     /// Like `torch.randint`.
     pub fn randint(low: i64, high: i64, shape: &[usize]) -> Self {
         use rand::Rng;
-        let numel = shape.iter().product::<usize>().max(1);
+        let numel = if shape.is_empty() { 1 } else { shape.iter().product::<usize>() };
         let mut rng = rand::thread_rng();
         let data: Vec<f64> = (0..numel)
             .map(|_| rng.gen_range(low..high) as f64)
@@ -141,7 +141,7 @@ impl Tensor {
     pub fn normal(mean: f64, std: f64, shape: &[usize]) -> Self {
         use rand::Rng;
         use rand_distr::{Normal, Distribution};
-        let numel = shape.iter().product::<usize>().max(1);
+        let numel = if shape.is_empty() { 1 } else { shape.iter().product::<usize>() };
         let normal = Normal::new(mean, std).unwrap();
         let mut rng = rand::thread_rng();
         let data: Vec<f64> = (0..numel).map(|_| normal.sample(&mut rng)).collect();
@@ -249,10 +249,14 @@ impl crate::storage::BackendStorageBoxed for CpuF64Storage {
             // CPU → CPU: just clone
             return Ok(self.clone_box());
         }
-        // CPU → GPU: materialize contiguous data, then create device storage.
-        // The actual GPU storage creation would be handled by the GPU backend crate.
-        // For now, we materialize the f64 data and store it tagged with the target device.
-        // When a real GPU backend is active, it will intercept this and do cudaMemcpy etc.
+        // CPU → GPU: no real GPU backend is implemented yet.
+        // Data stays in CPU memory but is tagged with the target device.
+        // This allows API testing but does NOT perform actual GPU compute.
+        eprintln!(
+            "warning: .to({:?}) requested but no GPU backend is compiled in. \
+             Data remains in CPU memory. Compute will use CPU.",
+            device
+        );
         let contiguous_data = self.to_f64_vec(shape, strides, offset)?;
         Ok(Box::new(CpuF64Storage {
             data: contiguous_data,

@@ -62,26 +62,23 @@ impl Embedding {
 impl Module for Embedding {
     fn forward(&self, input: &Variable) -> Variable {
         // input: integer indices tensor, output: [*input_shape, embedding_dim]
-        let indices = input.tensor().to_vec_f64().unwrap();
-        let weight_data = self.weight.tensor().to_vec_f64().unwrap();
         let input_shape = input.tensor().shape().to_vec();
+        let num_indices: usize = input.tensor().numel();
 
-        let num_indices: usize = indices.len();
-        let mut output = vec![0.0f64; num_indices * self.embedding_dim];
+        // Flatten indices to 1D for index_select, which selects rows from weight
+        let flat_indices = if input_shape.len() == 1 {
+            input.clone()
+        } else {
+            Variable::new(input.tensor().reshape(&[num_indices]).unwrap())
+        };
 
-        for (i, &idx) in indices.iter().enumerate() {
-            let idx = idx as usize;
-            assert!(idx < self.num_embeddings, "index {} out of range for embedding of size {}", idx, self.num_embeddings);
-            let src_offset = idx * self.embedding_dim;
-            let dst_offset = i * self.embedding_dim;
-            output[dst_offset..dst_offset + self.embedding_dim]
-                .copy_from_slice(&weight_data[src_offset..src_offset + self.embedding_dim]);
-        }
+        // Use index_select through autograd so gradients flow back to self.weight
+        let selected = self.weight.index_select(0, &flat_indices).unwrap();
 
+        // Reshape to [*input_shape, embedding_dim]
         let mut out_shape = input_shape;
         out_shape.push(self.embedding_dim);
-
-        Variable::new(Tensor::from_slice(&output, &out_shape))
+        selected.reshape(&out_shape).unwrap()
     }
 
     fn parameters(&self) -> Vec<Variable> {
