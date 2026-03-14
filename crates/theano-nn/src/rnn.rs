@@ -2,6 +2,7 @@
 
 use theano_autograd::Variable;
 use theano_core::Tensor;
+use theano_types::{Device, Result};
 use crate::init;
 use crate::module::Module;
 
@@ -28,6 +29,28 @@ impl RNNCell {
         }
     }
 
+    /// Move this layer to a different device, returning a new RNNCell.
+    pub fn to(&self, device: &Device) -> Result<Self> {
+        Ok(Self {
+            input_size: self.input_size,
+            hidden_size: self.hidden_size,
+            w_ih: self.w_ih.to(device)?,
+            w_hh: self.w_hh.to(device)?,
+            b_ih: self.b_ih.to(device)?,
+            b_hh: self.b_hh.to(device)?,
+        })
+    }
+
+    /// Move to CPU.
+    pub fn cpu(&self) -> Result<Self> {
+        self.to(&Device::Cpu)
+    }
+
+    /// Move to CUDA device 0.
+    pub fn cuda(&self) -> Result<Self> {
+        self.to(&Device::Cuda(0))
+    }
+
     /// Forward: (input, hidden) -> new_hidden
     /// input: [batch, input_size], hidden: [batch, hidden_size]
     pub fn forward_cell(&self, input: &Variable, hidden: &Variable) -> Variable {
@@ -50,6 +73,15 @@ impl Module for RNNCell {
 
     fn parameters(&self) -> Vec<Variable> {
         vec![self.w_ih.clone(), self.w_hh.clone(), self.b_ih.clone(), self.b_hh.clone()]
+    }
+
+    fn named_parameters(&self) -> Vec<(String, Variable)> {
+        vec![
+            ("w_ih".to_string(), self.w_ih.clone()),
+            ("w_hh".to_string(), self.w_hh.clone()),
+            ("b_ih".to_string(), self.b_ih.clone()),
+            ("b_hh".to_string(), self.b_hh.clone()),
+        ]
     }
 }
 
@@ -74,6 +106,28 @@ impl LSTMCell {
             b_ih: init::zeros(&[gate_size]),
             b_hh: init::zeros(&[gate_size]),
         }
+    }
+
+    /// Move this layer to a different device, returning a new LSTMCell.
+    pub fn to(&self, device: &Device) -> Result<Self> {
+        Ok(Self {
+            input_size: self.input_size,
+            hidden_size: self.hidden_size,
+            w_ih: self.w_ih.to(device)?,
+            w_hh: self.w_hh.to(device)?,
+            b_ih: self.b_ih.to(device)?,
+            b_hh: self.b_hh.to(device)?,
+        })
+    }
+
+    /// Move to CPU.
+    pub fn cpu(&self) -> Result<Self> {
+        self.to(&Device::Cpu)
+    }
+
+    /// Move to CUDA device 0.
+    pub fn cuda(&self) -> Result<Self> {
+        self.to(&Device::Cuda(0))
     }
 
     /// Reconstruct an LSTMCell from pre-trained tensors.
@@ -153,6 +207,15 @@ impl Module for LSTMCell {
     fn parameters(&self) -> Vec<Variable> {
         vec![self.w_ih.clone(), self.w_hh.clone(), self.b_ih.clone(), self.b_hh.clone()]
     }
+
+    fn named_parameters(&self) -> Vec<(String, Variable)> {
+        vec![
+            ("w_ih".to_string(), self.w_ih.clone()),
+            ("w_hh".to_string(), self.w_hh.clone()),
+            ("b_ih".to_string(), self.b_ih.clone()),
+            ("b_hh".to_string(), self.b_hh.clone()),
+        ]
+    }
 }
 
 #[cfg(test)]
@@ -182,5 +245,63 @@ mod tests {
     fn test_rnn_cell_params() {
         let cell = RNNCell::new(10, 20);
         assert_eq!(cell.parameters().len(), 4);
+    }
+
+    #[test]
+    fn test_rnn_cell_to_device() {
+        let cell = RNNCell::new(10, 20);
+        let cell_gpu = cell.to(&Device::Cuda(0)).unwrap();
+        for param in cell_gpu.parameters() {
+            assert_eq!(param.device(), &Device::Cuda(0));
+        }
+
+        let cell_cpu = cell_gpu.cpu().unwrap();
+        for param in cell_cpu.parameters() {
+            assert_eq!(param.device(), &Device::Cpu);
+        }
+    }
+
+    #[test]
+    fn test_rnn_cell_named_parameters() {
+        let cell = RNNCell::new(10, 20);
+        let named = cell.named_parameters();
+        assert_eq!(named.len(), 4);
+        assert_eq!(named[0].0, "w_ih");
+        assert_eq!(named[1].0, "w_hh");
+        assert_eq!(named[2].0, "b_ih");
+        assert_eq!(named[3].0, "b_hh");
+    }
+
+    #[test]
+    fn test_lstm_cell_to_device() {
+        let cell = LSTMCell::new(10, 20);
+        let cell_gpu = cell.to(&Device::Cuda(0)).unwrap();
+        for param in cell_gpu.parameters() {
+            assert_eq!(param.device(), &Device::Cuda(0));
+        }
+
+        let cell_cpu = cell_gpu.cpu().unwrap();
+        for param in cell_cpu.parameters() {
+            assert_eq!(param.device(), &Device::Cpu);
+        }
+    }
+
+    #[test]
+    fn test_lstm_cell_named_parameters() {
+        let cell = LSTMCell::new(10, 20);
+        let named = cell.named_parameters();
+        assert_eq!(named.len(), 4);
+        assert_eq!(named[0].0, "w_ih");
+        assert_eq!(named[1].0, "w_hh");
+    }
+
+    #[test]
+    fn test_rnn_cell_state_dict() {
+        let cell = RNNCell::new(10, 20);
+        let sd = cell.state_dict();
+        assert!(sd.contains_key("w_ih"));
+        assert!(sd.contains_key("w_hh"));
+        assert!(sd.contains_key("b_ih"));
+        assert!(sd.contains_key("b_hh"));
     }
 }

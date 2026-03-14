@@ -21,6 +21,16 @@ impl Dropout {
         Self { p, training: true }
     }
 
+    /// Set training mode.
+    pub fn set_training(&mut self, mode: bool) {
+        self.training = mode;
+    }
+
+    /// Check if in training mode.
+    pub fn is_training(&self) -> bool {
+        self.training
+    }
+
     pub fn train(&mut self) {
         self.training = true;
     }
@@ -86,5 +96,23 @@ mod tests {
         let output = dropout.forward(&input);
         let data = output.tensor().to_vec_f64().unwrap();
         assert!(data.iter().all(|&x| x == 1.0));
+    }
+
+    #[test]
+    fn test_dropout_set_training() {
+        let mut dropout = Dropout::new(0.5);
+        assert!(dropout.is_training());
+
+        dropout.set_training(false);
+        assert!(!dropout.is_training());
+
+        // In eval mode, should pass through
+        let input = Variable::new(Tensor::ones(&[100]));
+        let output = dropout.forward(&input);
+        let data = output.tensor().to_vec_f64().unwrap();
+        assert!(data.iter().all(|&x| x == 1.0));
+
+        dropout.set_training(true);
+        assert!(dropout.is_training());
     }
 }

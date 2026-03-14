@@ -361,4 +361,46 @@ impl Tensor {
         }
         Ok(d as usize)
     }
+
+    // ---- DType casting (like torch.Tensor.to(dtype) / .float() / .double() / .half()) ----
+
+    /// Cast this tensor to a different dtype. Like `torch.Tensor.to(dtype)`.
+    ///
+    /// Since internal storage is f64, this updates the dtype marker.
+    /// Real numeric conversion happens when GPU backends materialize the data.
+    /// If already the target dtype, returns a cheap clone.
+    pub fn to_dtype(&self, dtype: DType) -> Result<Tensor> {
+        if self.inner.dtype == dtype {
+            return Ok(self.clone());
+        }
+        Ok(Self {
+            inner: Arc::new(TensorInner {
+                storage: self.inner.storage.clone(),
+                shape: self.inner.shape.clone(),
+                strides: self.inner.strides.clone(),
+                offset: self.inner.offset,
+                dtype,
+                device: self.inner.device.clone(),
+                layout: self.inner.layout,
+                requires_grad: self.inner.requires_grad,
+                grad: RwLock::new(None),
+                grad_fn: self.inner.grad_fn.clone(),
+            }),
+        })
+    }
+
+    /// Cast to float32. Like `torch.Tensor.float()`.
+    pub fn float(&self) -> Result<Tensor> {
+        self.to_dtype(DType::F32)
+    }
+
+    /// Cast to float64. Like `torch.Tensor.double()`.
+    pub fn double(&self) -> Result<Tensor> {
+        self.to_dtype(DType::F64)
+    }
+
+    /// Cast to float16. Like `torch.Tensor.half()`.
+    pub fn half(&self) -> Result<Tensor> {
+        self.to_dtype(DType::F16)
+    }
 }

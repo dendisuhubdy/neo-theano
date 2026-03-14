@@ -2,6 +2,7 @@
 
 use theano_autograd::Variable;
 use theano_core::Tensor;
+use theano_types::{Device, Result};
 
 use crate::init;
 use crate::module::Module;
@@ -51,6 +52,35 @@ impl Conv1d {
             weight,
             bias,
         }
+    }
+    /// Move this layer to a different device, returning a new Conv1d layer.
+    ///
+    /// Like `layer.to(device)` in PyTorch.
+    pub fn to(&self, device: &Device) -> Result<Self> {
+        let weight = self.weight.to(device)?;
+        let bias = match &self.bias {
+            Some(b) => Some(b.to(device)?),
+            None => None,
+        };
+        Ok(Self {
+            weight,
+            bias,
+            in_channels: self.in_channels,
+            out_channels: self.out_channels,
+            kernel_size: self.kernel_size,
+            stride: self.stride,
+            padding: self.padding,
+        })
+    }
+
+    /// Move to CPU.
+    pub fn cpu(&self) -> Result<Self> {
+        self.to(&Device::Cpu)
+    }
+
+    /// Move to CUDA device 0.
+    pub fn cuda(&self) -> Result<Self> {
+        self.to(&Device::Cuda(0))
     }
 }
 
@@ -104,6 +134,14 @@ impl Module for Conv1d {
         }
         params
     }
+
+    fn named_parameters(&self) -> Vec<(String, Variable)> {
+        let mut params = vec![("weight".to_string(), self.weight.clone())];
+        if let Some(ref bias) = self.bias {
+            params.push(("bias".to_string(), bias.clone()));
+        }
+        params
+    }
 }
 
 #[cfg(test)]
@@ -131,5 +169,37 @@ mod tests {
         let conv = Conv1d::new(3, 16, 5);
         assert_eq!(conv.parameters().len(), 2);
         assert_eq!(conv.parameters()[0].tensor().shape(), &[16, 3, 5]);
+    }
+
+    #[test]
+    fn test_conv1d_to_device() {
+        let conv = Conv1d::new(3, 16, 3);
+        let conv_gpu = conv.to(&Device::Cuda(0)).unwrap();
+        for param in conv_gpu.parameters() {
+            assert_eq!(param.device(), &Device::Cuda(0));
+        }
+
+        let conv_back = conv_gpu.cpu().unwrap();
+        for param in conv_back.parameters() {
+            assert_eq!(param.device(), &Device::Cpu);
+        }
+    }
+
+    #[test]
+    fn test_conv1d_named_parameters() {
+        let conv = Conv1d::new(3, 16, 3);
+        let named = conv.named_parameters();
+        assert_eq!(named.len(), 2);
+        assert_eq!(named[0].0, "weight");
+        assert_eq!(named[1].0, "bias");
+    }
+
+    #[test]
+    fn test_conv1d_state_dict() {
+        let conv = Conv1d::new(3, 16, 5);
+        let sd = conv.state_dict();
+        assert!(sd.contains_key("weight"));
+        assert!(sd.contains_key("bias"));
+        assert_eq!(sd["weight"].shape(), &[16, 3, 5]);
     }
 }

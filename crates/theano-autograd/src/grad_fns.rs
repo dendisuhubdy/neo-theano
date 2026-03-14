@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use theano_core::Tensor;
 use theano_core::tensor::GradFn;
 
@@ -566,6 +564,219 @@ impl GradFn for ClampBackward {
 
     fn name(&self) -> &str {
         "ClampBackward"
+    }
+}
+
+// ---- Concatenation / Stacking grad functions ----
+
+pub struct CatBackward {
+    pub dim: usize,
+    pub sizes: Vec<usize>,
+}
+
+impl GradFn for CatBackward {
+    fn backward(&self, grad_output: &[Tensor]) -> Vec<Option<Tensor>> {
+        let grad = &grad_output[0];
+        // Split the gradient along the cat dimension according to saved sizes
+        let mut grads = Vec::new();
+        let mut offset = 0;
+        for &size in &self.sizes {
+            let g = grad.narrow(self.dim as i64, offset, size).unwrap();
+            // Make contiguous since narrow returns a view
+            let g = g.contiguous().unwrap();
+            grads.push(Some(g));
+            offset += size;
+        }
+        grads
+    }
+
+    fn name(&self) -> &str {
+        "CatBackward"
+    }
+}
+
+pub struct StackBackward {
+    pub dim: usize,
+    pub num_tensors: usize,
+}
+
+impl GradFn for StackBackward {
+    fn backward(&self, grad_output: &[Tensor]) -> Vec<Option<Tensor>> {
+        let grad = &grad_output[0];
+        // Unstack: select along the stacked dimension for each input
+        let mut grads = Vec::new();
+        for i in 0..self.num_tensors {
+            let g = grad.select(self.dim as i64, i as i64).unwrap();
+            let g = g.contiguous().unwrap();
+            grads.push(Some(g));
+        }
+        grads
+    }
+
+    fn name(&self) -> &str {
+        "StackBackward"
+    }
+}
+
+// ---- Conditional / Selection grad functions ----
+
+pub struct WhereBackward {
+    pub condition: SavedTensor,
+}
+
+impl GradFn for WhereBackward {
+    fn backward(&self, grad_output: &[Tensor]) -> Vec<Option<Tensor>> {
+        let grad = &grad_output[0];
+        let cond = &self.condition.0;
+        // For self (input 0): gradient where condition is true, zero otherwise
+        let zeros = Tensor::zeros(grad.shape());
+        let grad_self = grad.where_cond(cond, &zeros).unwrap();
+        // For other (input 1): gradient where condition is false, zero otherwise
+        let grad_other = zeros.where_cond(cond, grad).unwrap();
+        vec![Some(grad_self), Some(grad_other)]
+    }
+
+    fn name(&self) -> &str {
+        "WhereBackward"
+    }
+}
+
+pub struct SelectBackward {
+    pub dim: usize,
+    pub index: usize,
+    pub input_shape: Vec<usize>,
+}
+
+impl GradFn for SelectBackward {
+    fn backward(&self, grad_output: &[Tensor]) -> Vec<Option<Tensor>> {
+        let grad = &grad_output[0];
+        // Create a zero tensor of the input shape and scatter the gradient
+        // into the correct position
+        let grad_data = grad.contiguous().unwrap().to_vec_f64().unwrap();
+
+        let dim = self.dim;
+        let shape = &self.input_shape;
+
+        let outer_size: usize = shape[..dim].iter().product();
+        let dim_size = shape[dim];
+        let inner_size: usize = shape[dim + 1..].iter().product();
+
+        let total: usize = shape.iter().product();
+        let mut new_data = vec![0.0f64; total];
+        for outer in 0..outer_size {
+            for inner in 0..inner_size {
+                let src_flat = outer * inner_size + inner;
+                let dst_flat = outer * dim_size * inner_size + self.index * inner_size + inner;
+                new_data[dst_flat] = grad_data[src_flat];
+            }
+        }
+
+        let result = Tensor::from_slice(&new_data, &self.input_shape);
+        vec![Some(result)]
+    }
+
+    fn name(&self) -> &str {
+        "SelectBackward"
+    }
+}
+
+pub struct NarrowBackward {
+    pub dim: usize,
+    pub start: usize,
+    pub input_shape: Vec<usize>,
+}
+
+impl GradFn for NarrowBackward {
+    fn backward(&self, grad_output: &[Tensor]) -> Vec<Option<Tensor>> {
+        let grad = &grad_output[0];
+        let grad = grad.contiguous().unwrap();
+        let grad_data = grad.to_vec_f64().unwrap();
+
+        let dim = self.dim;
+        let shape = &self.input_shape;
+
+        let outer_size: usize = shape[..dim].iter().product();
+        let dim_size = shape[dim];
+        let inner_size: usize = shape[dim + 1..].iter().product();
+        let narrow_len = grad.shape()[dim];
+
+        let total: usize = shape.iter().product();
+        let mut new_data = vec![0.0f64; total];
+
+        for outer in 0..outer_size {
+            for i in 0..narrow_len {
+                for inner in 0..inner_size {
+                    let src_flat = outer * narrow_len * inner_size + i * inner_size + inner;
+                    let dst_flat = outer * dim_size * inner_size + (self.start + i) * inner_size + inner;
+                    new_data[dst_flat] = grad_data[src_flat];
+                }
+            }
+        }
+
+        let result = Tensor::from_slice(&new_data, &self.input_shape);
+        vec![Some(result)]
+    }
+
+    fn name(&self) -> &str {
+        "NarrowBackward"
+    }
+}
+
+pub struct ContiguousBackward;
+
+impl GradFn for ContiguousBackward {
+    fn backward(&self, grad_output: &[Tensor]) -> Vec<Option<Tensor>> {
+        // Identity: gradient passes through unchanged
+        vec![Some(grad_output[0].clone())]
+    }
+
+    fn name(&self) -> &str {
+        "ContiguousBackward"
+    }
+}
+
+pub struct IndexSelectBackward {
+    pub dim: usize,
+    pub indices: SavedTensor,
+    pub input_shape: Vec<usize>,
+}
+
+impl GradFn for IndexSelectBackward {
+    fn backward(&self, grad_output: &[Tensor]) -> Vec<Option<Tensor>> {
+        let grad = &grad_output[0];
+        let grad = grad.contiguous().unwrap();
+        let grad_data = grad.to_vec_f64().unwrap();
+        let idx_data = self.indices.0.to_vec_f64().unwrap();
+        let indices: Vec<usize> = idx_data.iter().map(|&v| v as usize).collect();
+
+        let dim = self.dim;
+        let shape = &self.input_shape;
+
+        let outer_size: usize = shape[..dim].iter().product();
+        let dim_size = shape[dim];
+        let inner_size: usize = shape[dim + 1..].iter().product();
+        let num_indices = indices.len();
+
+        let total: usize = shape.iter().product();
+        let mut new_data = vec![0.0f64; total];
+
+        // Scatter-add the gradients back
+        for outer in 0..outer_size {
+            for (ii, &idx) in indices.iter().enumerate() {
+                for inner in 0..inner_size {
+                    let src_flat = outer * num_indices * inner_size + ii * inner_size + inner;
+                    let dst_flat = outer * dim_size * inner_size + idx * inner_size + inner;
+                    new_data[dst_flat] += grad_data[src_flat];
+                }
+            }
+        }
+
+        let result = Tensor::from_slice(&new_data, &self.input_shape);
+        vec![Some(result)]
+    }
+
+    fn name(&self) -> &str {
+        "IndexSelectBackward"
     }
 }
 

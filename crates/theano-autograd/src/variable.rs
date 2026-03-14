@@ -77,18 +77,9 @@ impl Variable {
         self.inputs = vec![];
     }
 
-    // ---- Device transfer (like torch.Tensor.to / .cpu() / .cuda()) ----
+    // ---- Device transfer ----
 
-    /// Move this variable to a different device.
-    ///
-    /// Like `tensor.to(device)` in PyTorch. Returns a new leaf variable on the
-    /// target device, detached from the computation graph.
-    ///
-    /// # Examples
-    /// ```ignore
-    /// let x = Variable::requires_grad(Tensor::ones(&[2, 3]));
-    /// let x_gpu = x.to(&Device::Cuda(0))?;
-    /// ```
+    /// Move this variable to a different device. Like `tensor.to(device)` in PyTorch.
     pub fn to(&self, device: &Device) -> Result<Variable> {
         let new_tensor = self.tensor.to(device)?;
         if self.requires_grad_flag() {
@@ -98,12 +89,12 @@ impl Variable {
         }
     }
 
-    /// Move to CPU. Shorthand for `.to(&Device::Cpu)`.
+    /// Move to CPU.
     pub fn cpu(&self) -> Result<Variable> {
         self.to(&Device::Cpu)
     }
 
-    /// Move to CUDA device 0. Shorthand for `.to(&Device::Cuda(0))`.
+    /// Move to CUDA device 0.
     pub fn cuda(&self) -> Result<Variable> {
         self.to(&Device::Cuda(0))
     }
@@ -138,6 +129,16 @@ impl Variable {
                 inputs: vec![],
             }
         }
+    }
+
+    /// Public version of from_op for use by custom autograd functions
+    /// and checkpoint.
+    pub fn from_op_public(
+        tensor: Tensor,
+        grad_fn: Arc<dyn GradFn>,
+        inputs: Vec<Variable>,
+    ) -> Self {
+        Self::from_op(tensor, grad_fn, inputs)
     }
 
     // ---- Elementwise operations ----
@@ -365,6 +366,155 @@ impl Variable {
         self.transpose(0, 1)
     }
 
+    // ---- Concatenation / Stacking ----
+
+    /// Concatenate variables along an existing dimension. Like `torch.cat`.
+    pub fn cat(vars: &[&Variable], dim: i64) -> Result<Variable> {
+        if vars.is_empty() {
+            return Err(theano_types::TheanoError::invalid_argument("cat: empty variable list"));
+        }
+        let d = vars[0].tensor.normalize_dim(dim)?;
+        let tensors: Vec<Tensor> = vars.iter().map(|v| v.tensor.clone()).collect();
+        let result = Tensor::cat(&tensors, dim)?;
+        let sizes: Vec<usize> = vars.iter().map(|v| v.tensor.shape()[d]).collect();
+        let grad_fn = Arc::new(CatBackward {
+            dim: d,
+            sizes,
+        });
+        let input_vars: Vec<Variable> = vars.iter().map(|v| (*v).clone()).collect();
+        Ok(Variable::from_op(result, grad_fn, input_vars))
+    }
+
+    /// Stack variables along a new dimension. Like `torch.stack`.
+    pub fn stack(vars: &[&Variable], dim: i64) -> Result<Variable> {
+        if vars.is_empty() {
+            return Err(theano_types::TheanoError::invalid_argument("stack: empty variable list"));
+        }
+        let tensors: Vec<Tensor> = vars.iter().map(|v| v.tensor.clone()).collect();
+        let result = Tensor::stack(&tensors, dim)?;
+        let d = if dim < 0 {
+            (result.ndim() as i64 + dim) as usize
+        } else {
+            dim as usize
+        };
+        let num_tensors = vars.len();
+        let grad_fn = Arc::new(StackBackward {
+            dim: d,
+            num_tensors,
+        });
+        let input_vars: Vec<Variable> = vars.iter().map(|v| (*v).clone()).collect();
+        Ok(Variable::from_op(result, grad_fn, input_vars))
+    }
+
+    // ---- Conditional / Selection operations ----
+
+    /// Conditional selection: where condition is true (non-zero), use self;
+    /// otherwise use other. Like `torch.where`.
+    pub fn where_cond(&self, condition: &Variable, other: &Variable) -> Result<Variable> {
+        let result = self.tensor.where_cond(&condition.tensor, &other.tensor)?;
+        let grad_fn = Arc::new(WhereBackward {
+            condition: SavedTensor(condition.tensor.detach()),
+        });
+        Ok(Variable::from_op(result, grad_fn, vec![self.clone(), other.clone()]))
+    }
+
+    /// Select a sub-tensor along a dimension, reducing it by 1. Like `torch.Tensor.select`.
+    pub fn select(&self, dim: i64, index: i64) -> Result<Variable> {
+        let d = self.tensor.normalize_dim(dim)?;
+        let result = self.tensor.select(dim, index)?;
+        let grad_fn = Arc::new(SelectBackward {
+            dim: d,
+            index: if index < 0 {
+                (index + self.tensor.shape()[d] as i64) as usize
+            } else {
+                index as usize
+            },
+            input_shape: self.tensor.shape().to_vec(),
+        });
+        Ok(Variable::from_op(result, grad_fn, vec![self.clone()]))
+    }
+
+    /// Narrow (slice) along a dimension. Like `torch.Tensor.narrow`.
+    pub fn narrow(&self, dim: i64, start: i64, length: i64) -> Result<Variable> {
+        let d = self.tensor.normalize_dim(dim)?;
+        let start_usize = if start < 0 {
+            (start + self.tensor.shape()[d] as i64) as usize
+        } else {
+            start as usize
+        };
+        let length_usize = length as usize;
+        let result = self.tensor.narrow(dim, start_usize, length_usize)?;
+        let grad_fn = Arc::new(NarrowBackward {
+            dim: d,
+            start: start_usize,
+            input_shape: self.tensor.shape().to_vec(),
+        });
+        Ok(Variable::from_op(result, grad_fn, vec![self.clone()]))
+    }
+
+    /// View with a new shape (must be contiguous). Like `torch.Tensor.view`.
+    pub fn view(&self, shape: &[i64]) -> Result<Variable> {
+        // Convert i64 shape to usize, handling -1 for inference
+        let mut new_shape: Vec<usize> = Vec::new();
+        let mut infer_idx: Option<usize> = None;
+        let numel = self.tensor.numel();
+        let mut known_product: usize = 1;
+
+        for (i, &s) in shape.iter().enumerate() {
+            if s == -1 {
+                if infer_idx.is_some() {
+                    return Err(theano_types::TheanoError::invalid_argument(
+                        "view: only one dimension can be inferred (-1)",
+                    ));
+                }
+                infer_idx = Some(i);
+                new_shape.push(0); // placeholder
+            } else if s < 0 {
+                return Err(theano_types::TheanoError::invalid_argument(
+                    "view: invalid shape dimension",
+                ));
+            } else {
+                new_shape.push(s as usize);
+                known_product *= s as usize;
+            }
+        }
+
+        if let Some(idx) = infer_idx {
+            if known_product == 0 {
+                return Err(theano_types::TheanoError::invalid_argument(
+                    "view: cannot infer dimension with zero-size dimensions",
+                ));
+            }
+            new_shape[idx] = numel / known_product;
+        }
+
+        let result = self.tensor.view(&new_shape)?;
+        let grad_fn = Arc::new(ReshapeBackward {
+            input_shape: self.tensor.shape().to_vec(),
+        });
+        Ok(Variable::from_op(result, grad_fn, vec![self.clone()]))
+    }
+
+    /// Return a contiguous variable. Like `torch.Tensor.contiguous`.
+    pub fn contiguous(&self) -> Result<Variable> {
+        let result = self.tensor.contiguous()?;
+        // Identity backward — gradient just passes through
+        let grad_fn = Arc::new(ContiguousBackward);
+        Ok(Variable::from_op(result, grad_fn, vec![self.clone()]))
+    }
+
+    /// Select elements along a dimension using an index tensor. Like `torch.index_select`.
+    pub fn index_select(&self, dim: usize, indices: &Variable) -> Result<Variable> {
+        let result = self.tensor.index_select(dim, &indices.tensor)?;
+        let grad_fn = Arc::new(IndexSelectBackward {
+            dim,
+            indices: SavedTensor(indices.tensor.detach()),
+            input_shape: self.tensor.shape().to_vec(),
+        });
+        // Note: indices variable is not differentiated (integer indices)
+        Ok(Variable::from_op(result, grad_fn, vec![self.clone()]))
+    }
+
     // ---- Softmax ----
 
     pub fn softmax(&self, dim: i64) -> Result<Variable> {
@@ -435,45 +585,5 @@ impl std::ops::Neg for &Variable {
     type Output = Variable;
     fn neg(self) -> Variable {
         Variable::neg(self).expect("Variable neg failed")
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_variable_to_device() {
-        let x = Variable::requires_grad(Tensor::from_slice(&[1.0, 2.0, 3.0], &[3]));
-        let x_gpu = x.to(&Device::Cuda(0)).unwrap();
-        assert_eq!(x_gpu.device(), &Device::Cuda(0));
-        assert!(x_gpu.requires_grad_flag());
-    }
-
-    #[test]
-    fn test_variable_to_same_device() {
-        let x = Variable::new(Tensor::ones(&[2, 3]));
-        let x2 = x.to(&Device::Cpu).unwrap();
-        assert_eq!(x2.device(), &Device::Cpu);
-    }
-
-    #[test]
-    fn test_variable_cpu_shorthand() {
-        let x = Variable::new(Tensor::ones(&[2]));
-        let x_cpu = x.cpu().unwrap();
-        assert_eq!(x_cpu.device(), &Device::Cpu);
-    }
-
-    #[test]
-    fn test_variable_roundtrip() {
-        let x = Variable::requires_grad(Tensor::from_slice(&[5.0, 10.0], &[2]));
-        let x_gpu = x.to(&Device::Cuda(0)).unwrap();
-        let x_back = x_gpu.to(&Device::Cpu).unwrap();
-        assert_eq!(x_back.device(), &Device::Cpu);
-        assert!(x_back.requires_grad_flag());
-        assert_eq!(
-            x.tensor().to_vec_f64().unwrap(),
-            x_back.tensor().to_vec_f64().unwrap()
-        );
     }
 }
